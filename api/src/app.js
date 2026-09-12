@@ -1,14 +1,49 @@
 const path = require('node:path');
 const express = require('express');
+const multer = require('multer');
 const { buildChatReply } = require('./chat/buildChatReply');
 const { looksLikeAccountCreation, parseAccountMessage } = require('./accounts/parseAccountMessage');
 const { ACCOUNT_TYPES } = require('./accounts/validateAccountInput');
+const { MAX_FILE_SIZE_BYTES, FILE_TOO_LARGE_MESSAGE } = require('./documents/validateReceiptUpload');
 
 function statusCodeFor(err) {
   return err.statusCode || 500;
 }
 
-function createApp({ checkHealth, accountsService, transactionsService, resolveCurrentUserId, chatTransactionHandler }) {
+// Memory storage — the file is small (10MB cap), and the handler writes it to
+// api/uploads/receipts/<uuid>.<ext> itself rather than relying on multer's own disk-storage
+// defaults for the final path naming. `limits.fileSize` is set to the same 10MB cap
+// documents/validateReceiptUpload.js enforces, so an oversized upload is rejected by multer
+// itself — before the whole request body is buffered into memory — rather than only being
+// caught after the fact by our own check. No fileFilter here: type rejection still goes
+// through validateReceiptUpload so there is exactly one place producing that message.
+const receiptUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FILE_SIZE_BYTES } });
+
+// multer's own size-limit rejection happens inside the upload.single() middleware itself,
+// before our route handler (and thus validateReceiptUpload) ever runs — so it surfaces as a
+// MulterError passed to this callback, not as a thrown error our route's try/catch would see.
+// Normalized here to the exact same 400 shape/message validateReceiptUpload's own oversize
+// check produces, so callers see one consistent "file too large" response either way.
+function uploadReceiptFile(req, res, next) {
+  receiptUpload.single('file')(req, res, (err) => {
+    if (!err) {
+      return next();
+    }
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ errors: [FILE_TOO_LARGE_MESSAGE] });
+    }
+    next(err);
+  });
+}
+
+function createApp({
+  checkHealth,
+  accountsService,
+  transactionsService,
+  resolveCurrentUserId,
+  chatTransactionHandler,
+  receiptUploadHandler,
+}) {
   const app = express();
 
   app.use(express.json());
@@ -72,6 +107,28 @@ function createApp({ checkHealth, accountsService, transactionsService, resolveC
       const userId = await resolveCurrentUserId();
       const transactions = await transactionsService.listTransactionsForAccount(userId, req.params.id);
       res.status(200).json(transactions);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.post('/documents', uploadReceiptFile, async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      const result = await receiptUploadHandler.handleUpload(userId, {
+        file: req.file,
+        accountId: req.body && req.body.account_id,
+        channel: req.body && req.body.channel,
+      });
+      res.status(result.statusCode).json({
+        document_id: result.documentId,
+        transaction: result.transaction,
+        message: result.message,
+      });
     } catch (err) {
       if (err.statusCode) {
         res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });

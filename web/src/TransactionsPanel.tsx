@@ -37,6 +37,11 @@ export function TransactionsPanel({ accountId, accountLabel }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptUploading, setReceiptUploading] = useState(false);
+  const [receiptMessage, setReceiptMessage] = useState<string | null>(null);
+  const [receiptError, setReceiptError] = useState<string | null>(null);
+
   async function loadTransactions() {
     const res = await fetch(`/accounts/${accountId}/transactions`);
     if (res.ok) {
@@ -76,6 +81,36 @@ export function TransactionsPanel({ accountId, accountLabel }: Props) {
       setError(err instanceof Error ? err.message : 'Unknown error reaching the API');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleReceiptSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!receiptFile) return;
+    setReceiptUploading(true);
+    setReceiptError(null);
+    setReceiptMessage(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', receiptFile);
+      formData.append('account_id', accountId);
+      formData.append('channel', 'web_upload');
+
+      const res = await fetch('/documents', { method: 'POST', body: formData });
+      if (!res.ok) {
+        setReceiptError(await parseErrorMessage(res));
+        return;
+      }
+      const body = await res.json();
+      setReceiptMessage(body.message);
+      setReceiptFile(null);
+      if (body.transaction) {
+        await loadTransactions();
+      }
+    } catch (err) {
+      setReceiptError(err instanceof Error ? err.message : 'Unknown error reaching the API');
+    } finally {
+      setReceiptUploading(false);
     }
   }
 
@@ -120,6 +155,22 @@ export function TransactionsPanel({ accountId, accountLabel }: Props) {
       </form>
 
       {error && <p className="mb-3 text-sm text-rose-600">{error}</p>}
+
+      <form onSubmit={handleReceiptSubmit} className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-dashed border-slate-300 bg-slate-50 p-3">
+        <span className="text-sm font-medium text-slate-700">Upload Receipt</span>
+        <input
+          type="file"
+          accept="image/jpeg,image/png"
+          onChange={(e) => setReceiptFile(e.target.files?.[0] ?? null)}
+          className="text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-white file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 file:shadow-sm hover:file:bg-slate-100"
+        />
+        <Button type="submit" variant="secondary" disabled={!receiptFile || receiptUploading}>
+          {receiptUploading ? 'Uploading...' : 'Upload'}
+        </Button>
+      </form>
+
+      {receiptMessage && <p className="mb-3 text-sm text-slate-700">{receiptMessage}</p>}
+      {receiptError && <p className="mb-3 text-sm text-rose-600">{receiptError}</p>}
 
       {transactions.length === 0 ? (
         <p className="text-sm text-slate-500">No transactions yet.</p>
