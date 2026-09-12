@@ -2,7 +2,11 @@
 
 Modular personal finance helper. See the [planning vault](../../../obsidian_docs/Findo/Findo) for the design document and phase plans — this repo is the implementation, built one feature at a time per that plan.
 
-Currently: **Phase 1 — Foundation & Core Ingestion**, F1.1 (Platform Foundation & Health Check).
+Currently: **Phase 1 — Foundation & Core Ingestion**, F1.2 (Account Creation & Management).
+
+## Feature workflow
+
+Each feature is built on its own branch off `main` (e.g. `feature/f1-2-account-management`), with unit tests, lint, and smoke test coverage added alongside the implementation and passing before a PR is opened back to `main`.
 
 ## Structure
 
@@ -47,3 +51,12 @@ CI (`.github/workflows/ci.yml`) runs all four on every push and PR: `lint` and `
 ```
 
 Returns `200` when everything is healthy, `503` with per-subsystem detail otherwise.
+
+## Accounts (F1.2)
+
+- `POST /accounts` — `{ nickname, type, institution_name, last_four? }` → `201` with the created account. `type` is one of `checking`, `savings`, `credit_card`, `brokerage`, `loan`. Duplicate nicknames for the same user return `409`.
+- `GET /accounts` — lists the current user's accounts, newest first.
+- `PATCH /accounts/:id` — `{ nickname?, is_active? }` → `200` with the updated account, `404` if it doesn't belong to the current user.
+- Chat: a message like `"Add my Chase checking account, call it Chase-Checking"` is parsed and routed through the same service `POST /accounts` uses. If the account type can't be determined, Findo asks for it rather than guessing.
+
+Multi-tenant auth doesn't exist yet (single-user system, per F1.1) — every request resolves to the one seeded user from `npm run seed`.
