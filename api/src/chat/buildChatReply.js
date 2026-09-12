@@ -1,5 +1,5 @@
 function buildChatReply(text) {
-  return `Got it — you said: "${text}". Transaction parsing is not implemented yet (that's F1.4); this is just the F1.1 chat shell round-trip.`;
+  return `Got it — you said: "${text}". I can log transactions and manage accounts, but I can't answer general questions yet.`;
 }
 
 module.exports = { buildChatReply };

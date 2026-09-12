@@ -2,7 +2,7 @@
 
 Modular personal finance helper. See the [planning vault](../../../obsidian_docs/Findo/Findo) for the design document and phase plans — this repo is the implementation, built one feature at a time per that plan.
 
-Currently: **Phase 1 — Foundation & Core Ingestion**, F1.3 (Manual Transaction Entry).
+Currently: **Phase 1 — Foundation & Core Ingestion**, F1.5 (Chat Text-Based Transaction Capture).
 
 ## Feature workflow
 
@@ -67,3 +67,11 @@ Multi-tenant auth doesn't exist yet (single-user system, per F1.1) — every req
 - `GET /accounts/:id/transactions` — lists transactions for that account, newest first (by `transaction_date`, then `created_at` as a tiebreaker). The same ownership check applies, but an inactive account's existing transactions can still be listed — only *creating* against an inactive account is blocked.
 - Web: each account in the Accounts panel has a "View Transactions" toggle that shows a per-account transaction form and list.
 - Chat entry, receipt/statement parsing, categorization, and transfers are out of scope for this feature.
+
+## Chat Transactions (F1.5)
+
+- `POST /chat/messages` now also parses free-text transaction mentions (e.g. `"Spent $12.50 at Starbucks today"`) via a locally-hosted LLM (Ollama, `llama3.2:3b` by default — configurable via `OLLAMA_BASE_URL`/`OLLAMA_MODEL`, see `api/.env.example`). Account-creation phrasing (F1.2) is still checked first and unchanged.
+- If the account is unambiguous (named and matched, or the user has exactly one active account), the transaction is created immediately (`is_manual: false`, `reconciliation_status: "confirmed"`). If it's ambiguous, Findo asks which account and holds the transaction until the next message answers it (`reconciliation_status: "unconfirmed"` once resolved).
+- Every chat-originated transaction is tied back to its source message via `shared_items` + `transaction_sources` (`role: "origin"`).
+- Messages that aren't a recognizable transaction (a question, small talk) fall through to a generic reply — no data is persisted for them.
+- Receipt/statement parsing (vision-model work) and cross-source deduplication are out of scope for this feature.
