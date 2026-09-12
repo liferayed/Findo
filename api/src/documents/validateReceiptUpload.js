@@ -1,0 +1,37 @@
+// Images only, per the F1.6 scope decision — PDF (and everything else) is explicitly out of
+// scope for this pass. Keyed by mimetype so the same map also gives us the file extension to
+// store under.
+const ALLOWED_MIME_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png' };
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB, per the brief
+
+function extensionForMimeType(mimetype) {
+  return ALLOWED_MIME_TYPES[mimetype] || 'bin';
+}
+
+/**
+ * Validates a receipt upload request (the multer file plus the account_id form field) before
+ * any disk I/O or vision-model call happens. Pure and synchronous so a rejected request (bad
+ * account, wrong file type, oversized) never gets far enough to write a file or a DB row.
+ */
+function validateReceiptUpload({ file, accountId }) {
+  const errors = [];
+
+  if (typeof accountId !== 'string' || accountId.trim() === '') {
+    errors.push('account_id is required');
+  }
+
+  if (!file) {
+    errors.push('file is required');
+  } else {
+    if (!ALLOWED_MIME_TYPES[file.mimetype]) {
+      errors.push("Only JPEG/PNG images are supported right now — PDF receipts aren't yet handled.");
+    }
+    if (typeof file.size === 'number' && file.size > MAX_FILE_SIZE_BYTES) {
+      errors.push('File is too large — receipts must be 10MB or smaller.');
+    }
+  }
+
+  return errors;
+}
+
+module.exports = { validateReceiptUpload, ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES, extensionForMimeType };

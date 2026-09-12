@@ -5,6 +5,7 @@
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const http = require('node:http');
+const fs = require('node:fs');
 
 const API_PORT = process.env.SMOKE_API_PORT || 3999;
 const REPO_ROOT = path.join(__dirname, '..');
@@ -44,6 +45,48 @@ function httpRequestJson(method, url, payload) {
 
 function httpPostJson(url, payload) {
   return httpRequestJson('POST', url, payload);
+}
+
+// F1.6: no multipart-capable client is available here beyond node:http itself (the smoke test
+// deliberately has zero dependencies), so this builds a minimal multipart/form-data body by
+// hand — just enough to exercise POST /documents as a black box, same spirit as the JSON
+// helpers above.
+function httpPostMultipart(url, fields, fileField) {
+  return new Promise((resolve, reject) => {
+    const boundary = `----findoSmokeBoundary${Date.now()}`;
+    const parts = [];
+    for (const [key, value] of Object.entries(fields)) {
+      parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`));
+    }
+    if (fileField) {
+      const { name, filename, contentType, data } = fileField;
+      parts.push(
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`
+        )
+      );
+      parts.push(data);
+      parts.push(Buffer.from('\r\n'));
+    }
+    parts.push(Buffer.from(`--${boundary}--\r\n`));
+    const body = Buffer.concat(parts);
+
+    const req = http.request(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': body.length },
+      },
+      (res) => {
+        let resBody = '';
+        res.on('data', (chunk) => (resBody += chunk));
+        res.on('end', () => resolve({ status: res.statusCode, body: resBody }));
+      }
+    );
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
 }
 
 function httpPatchJson(url, payload) {
@@ -244,6 +287,67 @@ async function run() {
       assertThat(chatTxnListBody[0].is_manual === false, 'the chat-created transaction is marked is_manual: false');
     } else {
       console.log('  skip - chat transaction capture (Ollama not reachable, expected in CI)');
+    }
+
+    // F1.6: receipt upload & parsing, against the real local Ollama vision model. Same
+    // rationale/guard as the F1.5 block above — skipped rather than failed when Ollama isn't
+    // reachable (e.g. CI, which has no GPU/CPU budget for local vision-model inference). Run
+    // `npm run test:integration:llm --workspace=api` locally for full coverage of this path.
+    if (await isOllamaReachable()) {
+      const receiptAccount = await httpPostJson(`http://localhost:${API_PORT}/accounts`, {
+        nickname: `Smoke-Receipt-Checking-${uniqueSuffix}`,
+        type: 'checking',
+        institution_name: 'Smoke Bank',
+      });
+      assertThat(receiptAccount.status === 201, 'POST /accounts (for receipt upload smoke coverage) returns 201');
+      const receiptAccountBody = JSON.parse(receiptAccount.body);
+
+      const receiptFixturesDir = path.join(REPO_ROOT, 'api', 'test', 'fixtures', 'receipts');
+
+      const clearReceiptUpload = await httpPostMultipart(
+        `http://localhost:${API_PORT}/documents`,
+        { account_id: receiptAccountBody.id, channel: 'web_upload' },
+        {
+          name: 'file',
+          filename: 'clear-coffee-receipt.png',
+          contentType: 'image/png',
+          data: fs.readFileSync(path.join(receiptFixturesDir, 'clear-coffee-receipt.png')),
+        }
+      );
+      assertThat(clearReceiptUpload.status === 201, 'POST /documents with a clear receipt image returns 201');
+      const clearReceiptBody = JSON.parse(clearReceiptUpload.body);
+      assertThat(clearReceiptBody.transaction !== null, 'a legible receipt upload creates a transaction');
+      assertThat(
+        Number(clearReceiptBody.transaction.amount) === -15.75,
+        'the receipt-created transaction has the correct signed amount'
+      );
+      assertThat(clearReceiptBody.transaction.is_manual === false, 'the receipt-created transaction is marked is_manual: false');
+      assertThat(
+        typeof clearReceiptBody.message === 'string' && clearReceiptBody.message.length > 0,
+        'a successful receipt upload returns a confirmation message'
+      );
+
+      const illegibleUpload = await httpPostMultipart(
+        `http://localhost:${API_PORT}/documents`,
+        { account_id: receiptAccountBody.id, channel: 'web_upload' },
+        {
+          name: 'file',
+          filename: 'illegible-noise.png',
+          contentType: 'image/png',
+          data: fs.readFileSync(path.join(receiptFixturesDir, 'illegible-noise.png')),
+        }
+      );
+      assertThat(illegibleUpload.status === 200, 'POST /documents with an illegible receipt returns 200, not an error');
+      assertThat(JSON.parse(illegibleUpload.body).transaction === null, 'an illegible receipt does not create a transaction');
+
+      const badTypeUpload = await httpPostMultipart(
+        `http://localhost:${API_PORT}/documents`,
+        { account_id: receiptAccountBody.id },
+        { name: 'file', filename: 'notes.txt', contentType: 'text/plain', data: Buffer.from('not an image') }
+      );
+      assertThat(badTypeUpload.status === 400, 'POST /documents rejects a non-image file with 400');
+    } else {
+      console.log('  skip - receipt upload & parsing (Ollama not reachable, expected in CI)');
     }
 
     console.log('\nSmoke test passed.');

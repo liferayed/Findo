@@ -30,6 +30,11 @@ function buildApp(overrides = {}) {
     // Defaults to "not a transaction" so existing generic-echo behavior is unaffected;
     // F1.5-specific tests below override this to exercise the chat transaction-capture path.
     chatTransactionHandler: async () => null,
+    receiptUploadHandler: {
+      handleUpload: async () => {
+        throw new Error('handleUpload not stubbed');
+      },
+    },
     ...overrides,
   });
 }
@@ -290,6 +295,116 @@ describe('POST /chat/messages — F1.5 transaction capture wiring', () => {
     await request(app).post('/chat/messages').send({ text: 'Add my Chase checking account, call it Chase-Checking' });
 
     expect(called).toBe(false);
+  });
+});
+
+describe('POST /documents', () => {
+  test('a successful upload returns 201 with document_id, transaction, and message', async () => {
+    let received;
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleUpload: async (userId, args) => {
+          received = { userId, ...args, fileFieldPresent: Boolean(args.file) };
+          return {
+            statusCode: 201,
+            documentId: 'doc-1',
+            transaction: { id: 'txn-1', amount: '-15.75' },
+            message: 'Got it — logged $15.75 at Blue Bottle Coffee (debit).',
+          };
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post('/documents')
+      .field('account_id', 'acc-1')
+      .field('channel', 'web_upload')
+      .attach('file', Buffer.from('fake-image-bytes'), { filename: 'receipt.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({
+      document_id: 'doc-1',
+      transaction: { id: 'txn-1', amount: '-15.75' },
+      message: 'Got it — logged $15.75 at Blue Bottle Coffee (debit).',
+    });
+    expect(received.userId).toBe(FAKE_USER_ID);
+    expect(received.accountId).toBe('acc-1');
+    expect(received.channel).toBe('web_upload');
+    expect(received.fileFieldPresent).toBe(true);
+  });
+
+  test('an illegible-receipt outcome returns 200 with a null transaction', async () => {
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleUpload: async () => ({
+          statusCode: 200,
+          documentId: 'doc-2',
+          transaction: null,
+          message: "I couldn't read that receipt clearly — could you reshare a clearer photo, or enter it manually?",
+        }),
+      },
+    });
+
+    const res = await request(app)
+      .post('/documents')
+      .field('account_id', 'acc-1')
+      .attach('file', Buffer.from('fake-image-bytes'), { filename: 'blurry.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.transaction).toBeNull();
+    expect(res.body.document_id).toBe('doc-2');
+  });
+
+  test('propagates a ValidationError from the handler as 400', async () => {
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleUpload: async () => {
+          throw new ValidationError(["Only JPEG/PNG images are supported right now — PDF receipts aren't yet handled."]);
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post('/documents')
+      .field('account_id', 'acc-1')
+      .attach('file', Buffer.from('%PDF-1.4'), { filename: 'receipt.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toContain("Only JPEG/PNG images are supported right now — PDF receipts aren't yet handled.");
+  });
+
+  test('propagates a NotFoundError from the handler as 404 (bad account_id)', async () => {
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleUpload: async () => {
+          throw new NotFoundError('account not found');
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post('/documents')
+      .field('account_id', 'does-not-exist')
+      .attach('file', Buffer.from('fake-image-bytes'), { filename: 'receipt.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('account not found');
+  });
+
+  test('a request with no file at all still reaches the handler, which rejects it', async () => {
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleUpload: async (userId, { file }) => {
+          expect(file).toBeUndefined();
+          throw new ValidationError(['file is required']);
+        },
+      },
+    });
+
+    const res = await request(app).post('/documents').field('account_id', 'acc-1');
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toContain('file is required');
   });
 });
 

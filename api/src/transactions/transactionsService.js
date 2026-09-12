@@ -57,6 +57,27 @@ function createTransactionsService({ pool }) {
     return rows[0];
   }
 
+  // Used by the receipt-upload flow (F1.6). Type is always 'debit' (a receipt is a purchase —
+  // no credit/debit ambiguity to resolve, unlike F1.5's chat messages), always is_manual:
+  // false, always reconciliation_status: 'confirmed' (no account-ambiguity clarification loop
+  // for this feature, so there's nothing "unconfirmed" about the account resolution). The
+  // caller has already validated the extraction via documents/validateReceiptExtraction.js;
+  // findOwnedAccount is still called here (not just by the caller) so this method is safe to
+  // call on its own, same defensive posture as createTransactionFromChat.
+  async function createTransactionFromReceipt(userId, { accountId, transactionDate, amount, merchantRaw }) {
+    await findOwnedAccount(userId, accountId, { requireActive: true });
+
+    const signedAmount = -amount;
+
+    const { rows } = await pool.query(
+      `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, type, is_manual, reconciliation_status)
+       VALUES ($1, $2, $3, $4, 'debit', false, 'confirmed')
+       RETURNING ${TRANSACTION_COLUMNS}`,
+      [accountId, transactionDate, signedAmount, merchantRaw]
+    );
+    return rows[0];
+  }
+
   async function listTransactionsForAccount(userId, accountId) {
     // Listing is allowed against an inactive account (only creation is blocked).
     await findOwnedAccount(userId, accountId, { requireActive: false });
@@ -70,7 +91,13 @@ function createTransactionsService({ pool }) {
     return rows;
   }
 
-  return { createTransaction, createTransactionFromChat, listTransactionsForAccount };
+  return {
+    createTransaction,
+    createTransactionFromChat,
+    createTransactionFromReceipt,
+    listTransactionsForAccount,
+    findOwnedAccount,
+  };
 }
 
 module.exports = { createTransactionsService };

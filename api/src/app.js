@@ -1,5 +1,6 @@
 const path = require('node:path');
 const express = require('express');
+const multer = require('multer');
 const { buildChatReply } = require('./chat/buildChatReply');
 const { looksLikeAccountCreation, parseAccountMessage } = require('./accounts/parseAccountMessage');
 const { ACCOUNT_TYPES } = require('./accounts/validateAccountInput');
@@ -8,7 +9,22 @@ function statusCodeFor(err) {
   return err.statusCode || 500;
 }
 
-function createApp({ checkHealth, accountsService, transactionsService, resolveCurrentUserId, chatTransactionHandler }) {
+// Memory storage — the file is small (10MB cap enforced by documents/validateReceiptUpload.js
+// with a clear, friendly error message), and the handler writes it to
+// api/uploads/receipts/<uuid>.<ext> itself rather than relying on multer's own disk-storage
+// defaults for the final path naming. No fileFilter/limits configured here deliberately: type
+// and size rejection both go through validateReceiptUpload so there is exactly one place that
+// produces those error messages, rather than a multer-error path and an app-error path.
+const receiptUpload = multer({ storage: multer.memoryStorage() });
+
+function createApp({
+  checkHealth,
+  accountsService,
+  transactionsService,
+  resolveCurrentUserId,
+  chatTransactionHandler,
+  receiptUploadHandler,
+}) {
   const app = express();
 
   app.use(express.json());
@@ -72,6 +88,28 @@ function createApp({ checkHealth, accountsService, transactionsService, resolveC
       const userId = await resolveCurrentUserId();
       const transactions = await transactionsService.listTransactionsForAccount(userId, req.params.id);
       res.status(200).json(transactions);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.post('/documents', receiptUpload.single('file'), async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      const result = await receiptUploadHandler.handleUpload(userId, {
+        file: req.file,
+        accountId: req.body && req.body.account_id,
+        channel: req.body && req.body.channel,
+      });
+      res.status(result.statusCode).json({
+        document_id: result.documentId,
+        transaction: result.transaction,
+        message: result.message,
+      });
     } catch (err) {
       if (err.statusCode) {
         res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });

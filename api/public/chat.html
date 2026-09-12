@@ -20,10 +20,20 @@
     <button type="submit">Send</button>
   </form>
 
+  <h2 style="font-size: 14px; color: #555; margin: 20px 0 6px;">Attach a receipt</h2>
+  <form id="receipt-form">
+    <select id="receipt-account" required></select>
+    <input id="receipt-file" type="file" accept="image/jpeg,image/png" required />
+    <button type="submit">Upload</button>
+  </form>
+
   <script>
     const log = document.getElementById('log');
     const form = document.getElementById('chat-form');
     const input = document.getElementById('chat-input');
+    const receiptForm = document.getElementById('receipt-form');
+    const receiptAccountSelect = document.getElementById('receipt-account');
+    const receiptFileInput = document.getElementById('receipt-file');
 
     function append(who, text) {
       log.textContent += `${who}: ${text}\n\n`;
@@ -48,6 +58,51 @@
       } catch (err) {
         append('Findo', `Error reaching the API: ${err.message}`);
       }
+    });
+
+    async function loadReceiptAccounts() {
+      try {
+        const res = await fetch('/accounts');
+        if (!res.ok) return;
+        const accounts = await res.json();
+        receiptAccountSelect.innerHTML = '';
+        accounts
+          .filter((account) => account.is_active)
+          .forEach((account) => {
+            const option = document.createElement('option');
+            option.value = account.id;
+            option.textContent = account.nickname;
+            receiptAccountSelect.appendChild(option);
+          });
+      } catch {
+        // Best-effort — if this fails, the select is just empty and the user sees the
+        // form-level "required" validation when they try to submit.
+      }
+    }
+    loadReceiptAccounts();
+
+    receiptForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const file = receiptFileInput.files[0];
+      const accountId = receiptAccountSelect.value;
+      if (!file || !accountId) return;
+
+      append('You', `[attached receipt: ${file.name}]`);
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('account_id', accountId);
+      formData.append('channel', 'chat');
+
+      try {
+        const res = await fetch('/documents', { method: 'POST', body: formData });
+        const data = await res.json();
+        append('Findo', res.ok ? data.message : `Error: ${data.error || (data.errors && data.errors.join(', '))}`);
+      } catch (err) {
+        append('Findo', `Error reaching the API: ${err.message}`);
+      }
+
+      receiptFileInput.value = '';
     });
   </script>
 </body>
