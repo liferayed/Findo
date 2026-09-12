@@ -22,6 +22,34 @@ Rules:
 - date: the transaction date shown on the receipt, if legible.
 - line_items: each purchased item and its price, if legible. Empty array if not legible or not itemized.`;
 
+// Passed as `format` instead of the string "json" — a real JSON Schema, so Ollama constrains
+// generation to conform to it (grammar-constrained decoding), not just a prompt instruction the
+// model can ignore. This is what actually fixes the real bug that prompted it: a real
+// photographed receipt made this model return `"total": "11.29"` as a JSON string under plain
+// format:"json" mode; under this schema, the same image reliably returns a real JSON number.
+// The defensive coercion in documents/validateReceiptExtraction.js (coerceToPositiveNumber)
+// stays in place as a second line of defense, not a replacement for this fix.
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    merchant: { type: ['string', 'null'] },
+    date: { type: ['string', 'null'] },
+    total: { type: ['number', 'null'] },
+    line_items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          description: { type: 'string' },
+          amount: { type: 'number' },
+        },
+        required: ['description', 'amount'],
+      },
+    },
+  },
+  required: ['merchant', 'date', 'total', 'line_items'],
+};
+
 function parseModelJson(responseText) {
   try {
     return JSON.parse(responseText);
@@ -66,7 +94,7 @@ async function extractReceipt(imageBase64, { timeoutMs = EXTRACTION_TIMEOUT_MS }
         model: config.ollamaVisionModel,
         prompt: PROMPT_TEMPLATE,
         images: [imageBase64],
-        format: 'json',
+        format: RESPONSE_SCHEMA,
         stream: false,
         // temperature: 0 — structured field extraction wants determinism, not creative
         // sampling. Verified (commander spike) this eliminates the run-to-run variance
@@ -86,4 +114,4 @@ async function extractReceipt(imageBase64, { timeoutMs = EXTRACTION_TIMEOUT_MS }
   return Promise.race([call, timeout]);
 }
 
-module.exports = { extractReceipt, PROMPT_TEMPLATE, EXTRACTION_TIMEOUT_MS };
+module.exports = { extractReceipt, PROMPT_TEMPLATE, RESPONSE_SCHEMA, EXTRACTION_TIMEOUT_MS };
