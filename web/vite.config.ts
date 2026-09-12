@@ -11,6 +11,7 @@ export default defineConfig({
       '/chat': 'http://localhost:3000',
       '/accounts': 'http://localhost:3000',
       '/transactions': 'http://localhost:3000',
+      '/documents': 'http://localhost:3000',
     },
   },
 });
