@@ -15,7 +15,18 @@ Each feature is built on its own branch off `main` (e.g. `feature/f1-2-account-m
 
 ## Local setup
 
-Also requires [Ollama](https://ollama.com) running locally with `llama3.2:3b` pulled (`ollama pull llama3.2:3b`) for chat-based transaction parsing (F1.5) — see `api/.env.example` for `OLLAMA_BASE_URL`/`OLLAMA_MODEL` if you're pointing at a different host/model.
+Also requires [Ollama](https://ollama.com) running locally with `llama3.2:3b` (chat parsing) and `qwen2.5vl:3b` (receipt parsing) pulled — `ollama pull llama3.2:3b && ollama pull qwen2.5vl:3b`. See `api/.env.example` for `OLLAMA_BASE_URL`/`OLLAMA_MODEL`/`OLLAMA_VISION_MODEL` if you're pointing at a different host/model.
+
+### Quick start (Makefile)
+
+```bash
+make setup    # docker compose up + npm install + migrate + seed (first time only)
+make dev      # runs the API and web dev servers together in this terminal (Ctrl+C stops both)
+```
+
+Then open http://localhost:5173 (web) or http://localhost:3000/chat/chat.html (chat shell). Run `make help` to see every available command (`dev-api`/`dev-web` to run them separately in their own terminals, `test`/`test-integration`/`test-integration-llm`/`smoke`/`build`, `check` to run everything CI runs, `reset-db` to wipe and reseed the local dev database).
+
+### Equivalent plain npm commands
 
 ```bash
 docker compose up -d      # Postgres + Redis
@@ -29,14 +40,16 @@ npm run dev:web            # http://localhost:5173
 ## Tests
 
 ```bash
-npm run lint                                    # eslint across api + web
-npm test                                        # unit tests (api)
-npm run test:integration --workspace=api        # integration tests against live Postgres/Redis (needs docker compose up)
-npm run test:integration:llm --workspace=api    # LLM-dependent integration tests (needs Ollama running locally, see below) — NOT run in CI
-npm run smoke                                   # boots the real server, hits it over HTTP (needs docker compose up); LLM-dependent assertions auto-skip if Ollama isn't reachable
+make test               # lint + unit tests
+make test-integration   # integration tests against live Postgres/Redis (needs docker compose up)
+make test-integration-llm  # LLM-dependent integration tests (needs Ollama running locally) — NOT run in CI
+make smoke               # boots the real server, hits it over HTTP; LLM-dependent assertions auto-skip if Ollama isn't reachable
+make check               # everything above plus the web build, mirroring CI
 ```
 
-CI (`.github/workflows/ci.yml`) runs `lint` and `unit-tests` in parallel, then `smoke` (migrations + integration tests + the smoke script) against real Postgres/Redis service containers. Ollama is intentionally **not** installed in CI (no compute budget there for local LLM inference) — `test:integration:llm` and the smoke test's chat-transaction-capture assertions only run locally, where Ollama is expected to already be running.
+(Plain npm equivalents: `npm run lint`, `npm test`, `npm run test:integration --workspace=api`, `npm run test:integration:llm --workspace=api`, `npm run smoke`.)
+
+CI (`.github/workflows/ci.yml`) runs `lint` and `unit-tests` in parallel, then `smoke` (migrations + integration tests + the smoke script) against real Postgres/Redis service containers. Ollama is intentionally **not** installed in CI (no compute budget there for local LLM inference) — `test:integration:llm` and the smoke test's LLM-dependent assertions only run locally, where Ollama is expected to already be running.
 
 ## Health check
 
