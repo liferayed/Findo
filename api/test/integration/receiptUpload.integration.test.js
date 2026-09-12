@@ -136,6 +136,23 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
     expect(items[0].channel).toBe('web_upload');
   });
 
+  // Regression test for a real bug caught in production use (not the original test suite): a
+  // real Starbucks receipt with a Subtotal/Tax/Gratuity/Total breakdown made the model return
+  // `"total"` as a JSON string ("11.29") rather than a JSON number, which the original strict
+  // typeof-number check rejected outright — a perfectly legible receipt was wrongly reported as
+  // unreadable. Fixed in validateReceiptExtraction.js (coerceToPositiveNumber). This fixture
+  // recreates that receipt's exact content as a clean synthetic image.
+  test('a receipt whose total the model returns as a numeric string is still processed correctly (real-world regression)', async () => {
+    const file = loadFixture('starbucks-string-total-regression.png');
+
+    const result = await receiptUploadHandler.handleUpload(userId, { file, accountId: account.id, channel: 'web_upload' });
+
+    expect(result.statusCode).toBe(201);
+    expect(result.transaction).not.toBeNull();
+    expect(Number(result.transaction.amount)).toBe(-11.29);
+    expect(result.transaction.merchant_raw).toEqual(expect.stringContaining('STARBUCKS'));
+  });
+
   test('an illegible receipt is treated as unreadable: no transaction, shared_items marked failed', async () => {
     const file = loadFixture('illegible-noise.png');
 

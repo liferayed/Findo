@@ -6,8 +6,24 @@ function normalizedString(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
-function isValidPositiveNumber(value) {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+// The model doesn't always respect the "number" instruction in the prompt schema — observed on
+// a real photographed receipt returning `"total": "11.29"` as a JSON string. Accept a genuine
+// number OR a numeric string (optionally with a leading "$" and/or thousands commas, since a
+// real-world money value can come back formatted either way) rather than rejecting a perfectly
+// legible receipt just because the model quoted the number.
+function coerceToPositiveNumber(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  if (typeof value === 'string') {
+    const cleaned = value.trim().replace(/^\$/, '').replace(/,/g, '');
+    if (cleaned === '') {
+      return null;
+    }
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
 }
 
 function normalizeLineItems(rawLineItems) {
@@ -18,7 +34,7 @@ function normalizeLineItems(rawLineItems) {
     .filter((item) => item && typeof item === 'object')
     .map((item) => ({
       description: normalizedString(item.description) || 'Item',
-      amount: typeof item.amount === 'number' && Number.isFinite(item.amount) ? item.amount : null,
+      amount: coerceToPositiveNumber(item.amount),
     }))
     .filter((item) => item.amount !== null);
 }
@@ -49,7 +65,7 @@ function buildSummary(merchantRaw, total, lineItems) {
 function normalizeReceiptExtraction(raw, { now } = {}) {
   const source = raw && typeof raw === 'object' ? raw : {};
 
-  const total = isValidPositiveNumber(source.total) ? source.total : null;
+  const total = coerceToPositiveNumber(source.total);
   const isReadable = total !== null;
 
   if (!isReadable) {
