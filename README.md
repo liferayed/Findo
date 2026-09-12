@@ -15,6 +15,8 @@ Each feature is built on its own branch off `main` (e.g. `feature/f1-2-account-m
 
 ## Local setup
 
+Also requires [Ollama](https://ollama.com) running locally with `llama3.2:3b` pulled (`ollama pull llama3.2:3b`) for chat-based transaction parsing (F1.5) — see `api/.env.example` for `OLLAMA_BASE_URL`/`OLLAMA_MODEL` if you're pointing at a different host/model.
+
 ```bash
 docker compose up -d      # Postgres + Redis
 npm install
