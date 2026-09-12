@@ -185,6 +185,46 @@ async function run() {
       'chat reply confirms the account nickname'
     );
 
+    // F1.5: chat-based transaction capture, against the real local Ollama instance (already
+    // running — same as the integration tests, this is fast enough to include here).
+    const chatTxnAccount = await httpPostJson(`http://localhost:${API_PORT}/accounts`, {
+      nickname: `Smoke-Chat-Txn-Checking-${uniqueSuffix}`,
+      type: 'checking',
+      institution_name: 'Smoke Bank',
+    });
+    assertThat(chatTxnAccount.status === 201, 'POST /accounts (for chat transaction smoke coverage) returns 201');
+    const chatTxnAccountBody = JSON.parse(chatTxnAccount.body);
+
+    // Deactivate every other active account for the seeded user so exactly one is active,
+    // making the "no account_hint, single active account" auto-resolve path deterministic
+    // regardless of how many accounts earlier smoke runs (or earlier steps in this run)
+    // have left active.
+    const allAccountsRes = await httpGet(`http://localhost:${API_PORT}/accounts`);
+    const allAccounts = JSON.parse(allAccountsRes.body);
+    for (const acct of allAccounts) {
+      if (acct.id !== chatTxnAccountBody.id && acct.is_active) {
+        await httpPatchJson(`http://localhost:${API_PORT}/accounts/${acct.id}`, { is_active: false });
+      }
+    }
+
+    const chatTxn = await httpPostJson(`http://localhost:${API_PORT}/chat/messages`, {
+      text: 'Spent $12.50 at Starbucks today',
+    });
+    assertThat(chatTxn.status === 201, 'a clear chat transaction message returns 201');
+    const chatTxnBody = JSON.parse(chatTxn.body);
+    assertThat(chatTxnBody.reply.includes('Starbucks'), 'chat transaction reply mentions the merchant');
+    assertThat(
+      chatTxnBody.reply.includes(`Smoke-Chat-Txn-Checking-${uniqueSuffix}`),
+      'chat transaction reply confirms the resolved account nickname'
+    );
+
+    const chatTxnList = await httpGet(`http://localhost:${API_PORT}/accounts/${chatTxnAccountBody.id}/transactions`);
+    assertThat(chatTxnList.status === 200, 'GET /accounts/:id/transactions returns 200 for the chat-resolved account');
+    const chatTxnListBody = JSON.parse(chatTxnList.body);
+    assertThat(chatTxnListBody.length === 1, 'the chat-created transaction appears against the resolved account');
+    assertThat(Number(chatTxnListBody[0].amount) === -12.5, 'the chat-created transaction has the correct signed amount');
+    assertThat(chatTxnListBody[0].is_manual === false, 'the chat-created transaction is marked is_manual: false');
+
     console.log('\nSmoke test passed.');
     api.kill('SIGTERM');
   } catch (err) {
