@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Findo Chat (shell)</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; }
+  #log { border: 1px solid #ccc; border-radius: 8px; padding: 12px; min-height: 200px; margin-bottom: 12px; white-space: pre-wrap; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; padding: 8px; }
+  button { padding: 8px 16px; }
+</style>
+</head>
+<body>
+  <h1>Findo Chat</h1>
+  <p><em>Foundation shell only — no real parsing yet (that lands in F1.4+).</em></p>
+  <div id="log"></div>
+  <form id="chat-form">
+    <input id="chat-input" type="text" placeholder="Type a message..." autocomplete="off" required />
+    <button type="submit">Send</button>
+  </form>
+
+  <script>
+    const log = document.getElementById('log');
+    const form = document.getElementById('chat-form');
+    const input = document.getElementById('chat-input');
+
+    function append(who, text) {
+      log.textContent += `${who}: ${text}\n\n`;
+      log.scrollTop = log.scrollHeight;
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      append('You', text);
+      input.value = '';
+
+      try {
+        const res = await fetch('/chat/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        const data = await res.json();
+        append('Findo', res.ok ? data.reply : `Error: ${data.error}`);
+      } catch (err) {
+        append('Findo', `Error reaching the API: ${err.message}`);
+      }
+    });
+  </script>
+</body>
+</html>
