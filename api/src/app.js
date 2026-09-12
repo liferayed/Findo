@@ -8,7 +8,7 @@ function statusCodeFor(err) {
   return err.statusCode || 500;
 }
 
-function createApp({ checkHealth, accountsService, transactionsService, resolveCurrentUserId }) {
+function createApp({ checkHealth, accountsService, transactionsService, resolveCurrentUserId, chatTransactionHandler }) {
   const app = express();
 
   app.use(express.json());
@@ -111,6 +111,15 @@ function createApp({ checkHealth, accountsService, transactionsService, resolveC
         }
         throw err;
       }
+    }
+
+    // F1.5: not an account-creation message — try LLM-based transaction capture. Handler
+    // returns null when the message isn't an actionable transaction, in which case we fall
+    // through to the existing generic chat echo below (same as before F1.5 existed).
+    const userId = await resolveCurrentUserId();
+    const result = await chatTransactionHandler(userId, text);
+    if (result) {
+      return res.status(result.statusCode).json({ received: text, reply: result.reply });
     }
 
     res.status(201).json({ received: text, reply: buildChatReply(text) });

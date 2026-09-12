@@ -38,6 +38,25 @@ function createTransactionsService({ pool }) {
     return rows[0];
   }
 
+  // Used by the chat transaction-capture flow (F1.5). The input shape here differs enough
+  // from createTransaction's HTTP-body contract to make forcing it through
+  // validateTransactionInput awkward — the caller has already resolved the account and
+  // validated the extracted amount/type via chat/validateExtraction.js — but the actual
+  // INSERT and is_manual/reconciliation_status handling stays here rather than being forked.
+  async function createTransactionFromChat(userId, { accountId, transactionDate, amount, merchantRaw, type, reconciliationStatus }) {
+    await findOwnedAccount(userId, accountId, { requireActive: true });
+
+    const signedAmount = type === 'debit' ? -amount : amount;
+
+    const { rows } = await pool.query(
+      `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, type, is_manual, reconciliation_status)
+       VALUES ($1, $2, $3, $4, $5, false, $6)
+       RETURNING ${TRANSACTION_COLUMNS}`,
+      [accountId, transactionDate, signedAmount, merchantRaw, type, reconciliationStatus]
+    );
+    return rows[0];
+  }
+
   async function listTransactionsForAccount(userId, accountId) {
     // Listing is allowed against an inactive account (only creation is blocked).
     await findOwnedAccount(userId, accountId, { requireActive: false });
@@ -51,7 +70,7 @@ function createTransactionsService({ pool }) {
     return rows;
   }
 
-  return { createTransaction, listTransactionsForAccount };
+  return { createTransaction, createTransactionFromChat, listTransactionsForAccount };
 }
 
 module.exports = { createTransactionsService };

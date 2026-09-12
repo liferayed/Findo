@@ -27,6 +27,9 @@ function buildApp(overrides = {}) {
       },
     },
     resolveCurrentUserId: async () => FAKE_USER_ID,
+    // Defaults to "not a transaction" so existing generic-echo behavior is unaffected;
+    // F1.5-specific tests below override this to exercise the chat transaction-capture path.
+    chatTransactionHandler: async () => null,
     ...overrides,
   });
 }
@@ -229,6 +232,64 @@ describe('POST /chat/messages', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.reply).toEqual(expect.stringContaining('already exists'));
+  });
+});
+
+describe('POST /chat/messages — F1.5 transaction capture wiring', () => {
+  test('delegates non-account-creation messages to chatTransactionHandler with the resolved user id and text', async () => {
+    let received;
+    const app = buildApp({
+      chatTransactionHandler: async (userId, text) => {
+        received = { userId, text };
+        return { statusCode: 201, reply: 'Got it — logged $12.50 at Starbucks (debit) on Chase-Checking.' };
+      },
+    });
+
+    const res = await request(app).post('/chat/messages').send({ text: 'Spent $12.50 at Starbucks today' });
+
+    expect(received).toEqual({ userId: FAKE_USER_ID, text: 'Spent $12.50 at Starbucks today' });
+    expect(res.status).toBe(201);
+    expect(res.body.reply).toBe('Got it — logged $12.50 at Starbucks (debit) on Chase-Checking.');
+  });
+
+  test('uses the statusCode chatTransactionHandler returns (e.g. 200 for a clarification question)', async () => {
+    const app = buildApp({
+      chatTransactionHandler: async () => ({
+        statusCode: 200,
+        reply: 'Which account was this on? You have: Chase-Checking, Ally-Savings.',
+      }),
+    });
+
+    const res = await request(app).post('/chat/messages').send({ text: 'Spent $45 on my Chase checking' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.reply).toBe('Which account was this on? You have: Chase-Checking, Ally-Savings.');
+  });
+
+  test('falls through to the generic chat echo when chatTransactionHandler returns null (not a transaction)', async () => {
+    const app = buildApp({ chatTransactionHandler: async () => null });
+
+    const res = await request(app).post('/chat/messages').send({ text: 'How is my balance looking?' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.reply).toEqual(expect.stringContaining('How is my balance looking?'));
+  });
+
+  test('an "add ... account" message never reaches chatTransactionHandler', async () => {
+    let called = false;
+    const app = buildApp({
+      accountsService: {
+        createAccount: async (userId, input) => ({ id: 'acc-1', ...input }),
+      },
+      chatTransactionHandler: async () => {
+        called = true;
+        return null;
+      },
+    });
+
+    await request(app).post('/chat/messages').send({ text: 'Add my Chase checking account, call it Chase-Checking' });
+
+    expect(called).toBe(false);
   });
 });
 

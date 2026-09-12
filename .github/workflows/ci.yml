@@ -82,8 +82,8 @@ jobs:
       - name: Seed dev user
         run: npm run seed --workspace=api
 
-      - name: Integration tests (api, against live Postgres/Redis)
+      - name: Integration tests (api, against live Postgres/Redis — excludes LLM-dependent tests, see test:integration:llm)
         run: npm run test:integration --workspace=api
 
-      - name: Smoke test (boot the real server, hit it over HTTP)
+      - name: Smoke test (boot the real server, hit it over HTTP — LLM-dependent assertions skip automatically when Ollama isn't reachable)
         run: npm run smoke

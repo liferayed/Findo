@@ -7,14 +7,20 @@ const { runNoopJob, startNoopWorker } = require('./queue');
 const { createAccountsService } = require('./accounts/accountsService');
 const { createTransactionsService } = require('./transactions/transactionsService');
 const { getCurrentUserId } = require('./currentUser');
+const { extractTransaction } = require('./llm/ollamaClient');
+const { createChatTransactionHandler } = require('./chat/chatTransactionHandler');
 
 startNoopWorker();
+
+const transactionsService = createTransactionsService({ pool });
+const chatTransactionHandler = createChatTransactionHandler({ pool, transactionsService, extractTransaction });
 
 const app = createApp({
   checkHealth: () => checkHealth({ pingPostgres, pingRedis, runNoopJob }),
   accountsService: createAccountsService({ pool }),
-  transactionsService: createTransactionsService({ pool }),
+  transactionsService,
   resolveCurrentUserId: () => getCurrentUserId(pool),
+  chatTransactionHandler: chatTransactionHandler.handleMessage,
 });
 
 app.listen(config.port, () => {
