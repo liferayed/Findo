@@ -406,6 +406,34 @@ describe('POST /documents', () => {
     expect(res.status).toBe(400);
     expect(res.body.errors).toContain('file is required');
   });
+
+  // Guards against buffering an unbounded upload into memory before rejecting it: multer's own
+  // `limits.fileSize` (wired in app.js) must reject an oversized file during the multipart
+  // parse itself, before receiptUploadHandler.handleUpload — and thus
+  // documents/validateReceiptUpload.js — is ever reached, while still producing the exact same
+  // 400 shape/message a request that did reach validateReceiptUpload would get.
+  test('an oversized file is rejected by multer itself, before the upload handler ever runs', async () => {
+    let handlerCalled = false;
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleUpload: async () => {
+          handlerCalled = true;
+          throw new Error('should not be reached — multer should reject this upload first');
+        },
+      },
+    });
+
+    const oversizedBuffer = Buffer.alloc(10 * 1024 * 1024 + 1, 1);
+
+    const res = await request(app)
+      .post('/documents')
+      .field('account_id', 'acc-1')
+      .attach('file', oversizedBuffer, { filename: 'huge.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toContain('File is too large — receipts must be 10MB or smaller.');
+    expect(handlerCalled).toBe(false);
+  });
 });
 
 describe('POST /accounts', () => {

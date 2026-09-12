@@ -64,12 +64,19 @@ function createTransactionsService({ pool }) {
   // caller has already validated the extraction via documents/validateReceiptExtraction.js;
   // findOwnedAccount is still called here (not just by the caller) so this method is safe to
   // call on its own, same defensive posture as createTransactionFromChat.
-  async function createTransactionFromReceipt(userId, { accountId, transactionDate, amount, merchantRaw }) {
+  //
+  // Accepts an optional `client` (a checked-out pg client, e.g. from pool.connect()) so the
+  // caller can run this INSERT as part of a larger BEGIN/COMMIT transaction alongside its own
+  // writes (documents/receiptUploadService.js does this to keep the transaction row and its
+  // shared_items/documents/transaction_sources provenance atomic). Defaults to the service's
+  // own pool when no client is given, matching every other method here.
+  async function createTransactionFromReceipt(userId, { accountId, transactionDate, amount, merchantRaw }, { client } = {}) {
     await findOwnedAccount(userId, accountId, { requireActive: true });
 
     const signedAmount = -amount;
+    const executor = client || pool;
 
-    const { rows } = await pool.query(
+    const { rows } = await executor.query(
       `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, type, is_manual, reconciliation_status)
        VALUES ($1, $2, $3, $4, 'debit', false, 'confirmed')
        RETURNING ${TRANSACTION_COLUMNS}`,

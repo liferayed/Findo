@@ -4,6 +4,12 @@
 const ALLOWED_MIME_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png' };
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB, per the brief
 
+// Exported so app.js's multer `limits.fileSize` rejection (which happens at the HTTP layer,
+// before a file this large is even fully buffered into memory) can produce the exact same
+// message as this module's own oversize check — one user-facing string, not two.
+const UNSUPPORTED_FILE_TYPE_MESSAGE = "Only JPEG/PNG images are supported right now — PDF receipts aren't yet handled.";
+const FILE_TOO_LARGE_MESSAGE = 'File is too large — receipts must be 10MB or smaller.';
+
 function extensionForMimeType(mimetype) {
   return ALLOWED_MIME_TYPES[mimetype] || 'bin';
 }
@@ -24,14 +30,21 @@ function validateReceiptUpload({ file, accountId }) {
     errors.push('file is required');
   } else {
     if (!ALLOWED_MIME_TYPES[file.mimetype]) {
-      errors.push("Only JPEG/PNG images are supported right now — PDF receipts aren't yet handled.");
+      errors.push(UNSUPPORTED_FILE_TYPE_MESSAGE);
     }
     if (typeof file.size === 'number' && file.size > MAX_FILE_SIZE_BYTES) {
-      errors.push('File is too large — receipts must be 10MB or smaller.');
+      errors.push(FILE_TOO_LARGE_MESSAGE);
     }
   }
 
   return errors;
 }
 
-module.exports = { validateReceiptUpload, ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES, extensionForMimeType };
+module.exports = {
+  validateReceiptUpload,
+  ALLOWED_MIME_TYPES,
+  MAX_FILE_SIZE_BYTES,
+  extensionForMimeType,
+  UNSUPPORTED_FILE_TYPE_MESSAGE,
+  FILE_TOO_LARGE_MESSAGE,
+};

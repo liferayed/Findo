@@ -15,8 +15,10 @@ function normalizeChannel(channel) {
   return channel === 'chat' ? 'chat' : 'web_upload';
 }
 
-async function insertSharedItem(pool, userId, channel, fileRef, parseStatus, parsedSummary) {
-  const { rows } = await pool.query(
+// All three of these take a checked-out client (not the pool) so every write in handleUpload
+// below runs on the same BEGIN/COMMIT transaction — see the comment there for why.
+async function insertSharedItem(client, userId, channel, fileRef, parseStatus, parsedSummary) {
+  const { rows } = await client.query(
     `INSERT INTO shared_items (user_id, channel, content_type, file_ref, parse_status, parsed_summary)
      VALUES ($1, $2, 'file', $3, $4, $5)
      RETURNING id`,
@@ -25,8 +27,8 @@ async function insertSharedItem(pool, userId, channel, fileRef, parseStatus, par
   return rows[0];
 }
 
-async function insertDocument(pool, sharedItemId) {
-  const { rows } = await pool.query(
+async function insertDocument(client, sharedItemId) {
+  const { rows } = await client.query(
     `INSERT INTO documents (shared_item_id, document_type, page_count)
      VALUES ($1, 'receipt', 1)
      RETURNING id`,
@@ -35,11 +37,11 @@ async function insertDocument(pool, sharedItemId) {
   return rows[0];
 }
 
-async function insertTransactionSource(pool, transactionId, sharedItemId) {
-  await pool.query(`INSERT INTO transaction_sources (transaction_id, shared_item_id, role) VALUES ($1, $2, 'origin')`, [
-    transactionId,
-    sharedItemId,
-  ]);
+async function insertTransactionSource(client, transactionId, sharedItemId) {
+  await client.query(
+    `INSERT INTO transaction_sources (transaction_id, shared_item_id, role) VALUES ($1, $2, 'origin')`,
+    [transactionId, sharedItemId]
+  );
 }
 
 /**
@@ -64,44 +66,61 @@ function createReceiptUploadHandler({ pool, transactionsService, extractReceipt 
     const channelValue = normalizeChannel(channel);
     const fileRef = await saveReceiptFile(file);
 
+    let rawExtraction = null;
     try {
-      let rawExtraction = null;
-      try {
-        rawExtraction = await extractReceipt(file.buffer.toString('base64'));
-      } catch {
-        // Model unreachable, timed out, or returned unparseable output — treated exactly like
-        // an illegible image (never fabricate a transaction from a failed call), not a 500.
-        rawExtraction = null;
-      }
+      rawExtraction = await extractReceipt(file.buffer.toString('base64'));
+    } catch {
+      // Model unreachable, timed out, or returned unparseable output — treated exactly like
+      // an illegible image (never fabricate a transaction from a failed call), not a 500.
+      rawExtraction = null;
+    }
 
-      const extraction = normalizeReceiptExtraction(rawExtraction);
+    const extraction = normalizeReceiptExtraction(rawExtraction);
+
+    // Everything from here down (the transaction row, if any, plus shared_items/documents/
+    // transaction_sources) runs on one checked-out client inside a real SQL transaction, so
+    // the writes are atomic: either all of them land, or none do. Without this, a failure in
+    // one of the later inserts after the transaction row was already committed on its own
+    // would leave a permanent, provenance-less transaction behind — worse than simply losing
+    // the upload.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
       if (!extraction.isReadable) {
-        const sharedItem = await insertSharedItem(pool, userId, channelValue, fileRef, 'failed', FAILED_SUMMARY);
-        const document = await insertDocument(pool, sharedItem.id);
+        const sharedItem = await insertSharedItem(client, userId, channelValue, fileRef, 'failed', FAILED_SUMMARY);
+        const document = await insertDocument(client, sharedItem.id);
+        await client.query('COMMIT');
         return { statusCode: 200, documentId: document.id, transaction: null, message: UNREADABLE_REPLY };
       }
 
-      // Create the transaction first (re-validates account ownership internally): if this
-      // somehow fails, nothing else has been written yet, so there's no partial/orphan
-      // shared_items or documents row left behind.
-      const transaction = await transactionsService.createTransactionFromReceipt(userId, {
-        accountId,
-        transactionDate: extraction.transactionDate,
-        amount: extraction.total,
-        merchantRaw: extraction.merchantRaw,
-      });
+      const transaction = await transactionsService.createTransactionFromReceipt(
+        userId,
+        {
+          accountId,
+          transactionDate: extraction.transactionDate,
+          amount: extraction.total,
+          merchantRaw: extraction.merchantRaw,
+        },
+        { client }
+      );
 
-      const sharedItem = await insertSharedItem(pool, userId, channelValue, fileRef, 'parsed', extraction.summary);
-      const document = await insertDocument(pool, sharedItem.id);
-      await insertTransactionSource(pool, transaction.id, sharedItem.id);
+      const sharedItem = await insertSharedItem(client, userId, channelValue, fileRef, 'parsed', extraction.summary);
+      const document = await insertDocument(client, sharedItem.id);
+      await insertTransactionSource(client, transaction.id, sharedItem.id);
 
+      await client.query('COMMIT');
       return { statusCode: 201, documentId: document.id, transaction, message: buildConfirmationReply(extraction) };
     } catch (err) {
-      // Something failed after the file was already written to disk (e.g. a DB error) —
-      // clean up the orphan file rather than leaving it behind with nothing referencing it.
+      await client.query('ROLLBACK').catch(() => {
+        // best-effort — if the connection itself is broken, there's nothing more to roll back
+      });
+      // The file was already written to disk before this transaction started — clean it up
+      // rather than leaving it behind with nothing in the (now rolled-back) DB referencing it.
       await deleteReceiptFileQuietly(fileRef);
       throw err;
+    } finally {
+      client.release();
     }
   }
 
