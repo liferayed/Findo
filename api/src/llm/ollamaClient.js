@@ -66,6 +66,9 @@ async function extractTransaction(message, { timeoutMs = EXTRACTION_TIMEOUT_MS }
         prompt: buildPrompt(message),
         format: 'json',
         stream: false,
+        // temperature: 0 — structured field extraction wants determinism, not creative
+        // sampling (added alongside F1.6's vision client for the same reason).
+        options: { temperature: 0 },
       }),
     });
 

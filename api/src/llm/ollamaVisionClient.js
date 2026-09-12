@@ -68,6 +68,10 @@ async function extractReceipt(imageBase64, { timeoutMs = EXTRACTION_TIMEOUT_MS }
         images: [imageBase64],
         format: 'json',
         stream: false,
+        // temperature: 0 — structured field extraction wants determinism, not creative
+        // sampling. Verified (commander spike) this eliminates the run-to-run variance
+        // observed at the default temperature across repeated calls on the same image.
+        options: { temperature: 0 },
       }),
     });
 
