@@ -9,6 +9,7 @@ export default defineConfig({
       '/health': 'http://localhost:3000',
       '/chat': 'http://localhost:3000',
       '/accounts': 'http://localhost:3000',
+      '/transactions': 'http://localhost:3000',
     },
   },
 });

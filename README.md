@@ -2,7 +2,7 @@
 
 Modular personal finance helper. See the [planning vault](../../../obsidian_docs/Findo/Findo) for the design document and phase plans — this repo is the implementation, built one feature at a time per that plan.
 
-Currently: **Phase 1 — Foundation & Core Ingestion**, F1.2 (Account Creation & Management).
+Currently: **Phase 1 — Foundation & Core Ingestion**, F1.3 (Manual Transaction Entry).
 
 ## Feature workflow
 
@@ -60,3 +60,10 @@ Returns `200` when everything is healthy, `503` with per-subsystem detail otherw
 - Chat: a message like `"Add my Chase checking account, call it Chase-Checking"` is parsed and routed through the same service `POST /accounts` uses. If the account type can't be determined, Findo asks for it rather than guessing.
 
 Multi-tenant auth doesn't exist yet (single-user system, per F1.1) — every request resolves to the one seeded user from `npm run seed`.
+
+## Transactions (F1.3)
+
+- `POST /transactions` — `{ account_id, transaction_date, amount, type, merchant_raw }` → `201` with the created transaction. `amount` is a **positive magnitude**; `type` is `"debit"` or `"credit"` (`"transfer"` is rejected — not supported by this feature). The server computes the stored signed `amount` (negative for a debit, positive for a credit), and always sets `is_manual: true`, `reconciliation_status: "confirmed"`, `category_id: null`. `account_id` must belong to the current user and be active, or the request is rejected with `404` (the same error regardless of whether the account doesn't exist, isn't the caller's, or is inactive).
+- `GET /accounts/:id/transactions` — lists transactions for that account, newest first (by `transaction_date`, then `created_at` as a tiebreaker). The same ownership check applies, but an inactive account's existing transactions can still be listed — only *creating* against an inactive account is blocked.
+- Web: each account in the Accounts panel has a "View Transactions" toggle that shows a per-account transaction form and list.
+- Chat entry, receipt/statement parsing, categorization, and transfers are out of scope for this feature.
