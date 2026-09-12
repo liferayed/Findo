@@ -29,13 +29,14 @@ npm run dev:web            # http://localhost:5173
 ## Tests
 
 ```bash
-npm run lint                                # eslint across api + web
-npm test                                    # unit tests (api)
-npm run test:integration --workspace=api    # integration tests against live Postgres/Redis (needs docker compose up)
-npm run smoke                               # boots the real server, hits it over HTTP (needs docker compose up)
+npm run lint                                    # eslint across api + web
+npm test                                        # unit tests (api)
+npm run test:integration --workspace=api        # integration tests against live Postgres/Redis (needs docker compose up)
+npm run test:integration:llm --workspace=api    # LLM-dependent integration tests (needs Ollama running locally, see below) — NOT run in CI
+npm run smoke                                   # boots the real server, hits it over HTTP (needs docker compose up); LLM-dependent assertions auto-skip if Ollama isn't reachable
 ```
 
-CI (`.github/workflows/ci.yml`) runs all four on every push and PR: `lint` and `unit-tests` in parallel, then `smoke` (migrations + integration tests + the smoke script) against real Postgres/Redis service containers.
+CI (`.github/workflows/ci.yml`) runs `lint` and `unit-tests` in parallel, then `smoke` (migrations + integration tests + the smoke script) against real Postgres/Redis service containers. Ollama is intentionally **not** installed in CI (no compute budget there for local LLM inference) — `test:integration:llm` and the smoke test's chat-transaction-capture assertions only run locally, where Ollama is expected to already be running.
 
 ## Health check
 

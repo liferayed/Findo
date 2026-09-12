@@ -10,7 +10,8 @@
     "migrate": "node-pg-migrate",
     "seed": "node scripts/seed.js",
     "test": "jest",
-    "test:integration": "jest --config jest.integration.config.js"
+    "test:integration": "jest --config jest.integration.config.js",
+    "test:integration:llm": "jest --config jest.integration.llm.config.js"
   },
   "jest": {
     "testPathIgnorePatterns": ["/node_modules/", "/test/integration/"]
