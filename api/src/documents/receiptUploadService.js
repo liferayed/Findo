@@ -83,7 +83,17 @@ function createReceiptUploadHandler({ pool, transactionsService, extractReceipt 
     // one of the later inserts after the transaction row was already committed on its own
     // would leave a permanent, provenance-less transaction behind — worse than simply losing
     // the upload.
-    const client = await pool.connect();
+    let client;
+    try {
+      client = await pool.connect();
+    } catch (err) {
+      // Couldn't even acquire a connection (pool exhaustion, DB unreachable) — the file was
+      // already written above, clean it up rather than leaving it orphaned with no DB attempt
+      // ever made against it.
+      await deleteReceiptFileQuietly(fileRef);
+      throw err;
+    }
+
     try {
       await client.query('BEGIN');
 

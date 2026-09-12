@@ -6,10 +6,12 @@
 // is purely the SQL transaction wrapping around the four inserts, which has nothing to do with
 // the vision model. Keeping it out of the LLM-tagged config means it's fast, deterministic, and
 // still runs in the default `test:integration` (CI-safe) bucket.
+const fs = require('node:fs/promises');
 const { pool } = require('../../src/db');
 const { createAccountsService } = require('../../src/accounts/accountsService');
 const { createTransactionsService } = require('../../src/transactions/transactionsService');
 const { createReceiptUploadHandler } = require('../../src/documents/receiptUploadService');
+const { UPLOAD_DIR } = require('../../src/documents/receiptStorage');
 
 const accountsService = createAccountsService({ pool });
 const transactionsService = createTransactionsService({ pool });
@@ -168,5 +170,29 @@ describe('receipt upload write-sequence atomicity (real Postgres, stubbed vision
     ).rejects.toThrow('simulated failure injected for atomicity test');
 
     expect(await countRows('shared_items', 'user_id = $1', [userId])).toBe(0);
+  });
+
+  // Regression test for a narrower gap the reviewer found in the first version of the atomicity
+  // fix: pool.connect() itself sat outside the try/catch that cleans up the already-saved file,
+  // so a connection-acquisition failure (pool exhaustion, DB unreachable) would leave the file
+  // orphaned on disk with no DB attempt ever made. Uses a real UPLOAD_DIR before/after diff
+  // rather than mocking the storage module, so this proves the actual saved file is gone, not
+  // just that a mock was called.
+  test('a failure acquiring a DB connection still cleans up the already-saved file', async () => {
+    const unconnectablePool = {
+      connect: async () => {
+        throw new Error('simulated pool exhaustion');
+      },
+    };
+    const handler = createReceiptUploadHandler({ pool: unconnectablePool, transactionsService, extractReceipt: stubExtractReceipt });
+
+    const before = await fs.readdir(UPLOAD_DIR).catch(() => []);
+
+    await expect(
+      handler.handleUpload(userId, { file: fakeReceiptFile(), accountId: account.id, channel: 'chat' })
+    ).rejects.toThrow('simulated pool exhaustion');
+
+    const after = await fs.readdir(UPLOAD_DIR).catch(() => []);
+    expect(after).toEqual(before);
   });
 });
