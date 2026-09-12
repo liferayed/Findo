@@ -140,6 +140,42 @@ async function run() {
     });
     assertThat(duplicate.status === 409, 'POST /accounts rejects a duplicate nickname with 409');
 
+    const smokeTxnAccount = await httpPostJson(`http://localhost:${API_PORT}/accounts`, {
+      nickname: `Smoke-Test-Txn-Checking-${uniqueSuffix}`,
+      type: 'checking',
+      institution_name: 'Smoke Bank',
+    });
+    assertThat(smokeTxnAccount.status === 201, 'POST /accounts (for transaction smoke coverage) returns 201');
+    const smokeTxnAccountBody = JSON.parse(smokeTxnAccount.body);
+
+    const createdDebit = await httpPostJson(`http://localhost:${API_PORT}/transactions`, {
+      account_id: smokeTxnAccountBody.id,
+      transaction_date: '2026-01-15',
+      amount: 42.5,
+      type: 'debit',
+      merchant_raw: 'Smoke Test Coffee',
+    });
+    assertThat(createdDebit.status === 201, 'POST /transactions returns 201');
+    const createdDebitBody = JSON.parse(createdDebit.body);
+    assertThat(Number(createdDebitBody.amount) === -42.5, 'a debit transaction is stored with a negative amount');
+
+    const invalidTxn = await httpPostJson(`http://localhost:${API_PORT}/transactions`, {
+      account_id: smokeTxnAccountBody.id,
+      transaction_date: '2026-01-15',
+      amount: 10,
+      type: 'transfer',
+      merchant_raw: 'Smoke Test Transfer',
+    });
+    assertThat(invalidTxn.status === 400, 'POST /transactions rejects a transfer type with 400');
+
+    const txnList = await httpGet(`http://localhost:${API_PORT}/accounts/${smokeTxnAccountBody.id}/transactions`);
+    assertThat(txnList.status === 200, 'GET /accounts/:id/transactions returns 200');
+    const txnListBody = JSON.parse(txnList.body);
+    assertThat(
+      txnListBody.some((t) => t.id === createdDebitBody.id),
+      'the newly created transaction appears in GET /accounts/:id/transactions'
+    );
+
     const chatAccount = await httpPostJson(`http://localhost:${API_PORT}/chat/messages`, {
       text: `Add my Smoke Chat Bank checking account, call it Smoke-Chat-Checking-${uniqueSuffix}`,
     });

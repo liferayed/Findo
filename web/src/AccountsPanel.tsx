@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { TransactionsPanel } from './TransactionsPanel';
 
 type Account = {
   id: string;
@@ -26,6 +27,7 @@ export function AccountsPanel() {
   const [lastFour, setLastFour] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [expandedAccountId, setExpandedAccountId] = useState<string | null>(null);
 
   async function loadAccounts() {
     const res = await fetch('/accounts');
@@ -125,7 +127,16 @@ export function AccountsPanel() {
             {account.is_active ? 'active' : 'inactive'}{' '}
             <button type="button" onClick={() => toggleActive(account)}>
               {account.is_active ? 'Deactivate' : 'Reactivate'}
+            </button>{' '}
+            <button
+              type="button"
+              onClick={() => setExpandedAccountId(expandedAccountId === account.id ? null : account.id)}
+            >
+              {expandedAccountId === account.id ? 'Hide Transactions' : 'View Transactions'}
             </button>
+            {expandedAccountId === account.id && (
+              <TransactionsPanel accountId={account.id} accountLabel={account.nickname} />
+            )}
           </li>
         ))}
       </ul>

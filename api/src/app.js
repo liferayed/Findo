@@ -8,7 +8,7 @@ function statusCodeFor(err) {
   return err.statusCode || 500;
 }
 
-function createApp({ checkHealth, accountsService, resolveCurrentUserId }) {
+function createApp({ checkHealth, accountsService, transactionsService, resolveCurrentUserId }) {
   const app = express();
 
   app.use(express.json());
@@ -44,6 +44,34 @@ function createApp({ checkHealth, accountsService, resolveCurrentUserId }) {
       const userId = await resolveCurrentUserId();
       const account = await accountsService.updateAccount(userId, req.params.id, req.body || {});
       res.status(200).json(account);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.post('/transactions', async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      const transaction = await transactionsService.createTransaction(userId, req.body || {});
+      res.status(201).json(transaction);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.get('/accounts/:id/transactions', async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      const transactions = await transactionsService.listTransactionsForAccount(userId, req.params.id);
+      res.status(200).json(transactions);
     } catch (err) {
       if (err.statusCode) {
         res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });

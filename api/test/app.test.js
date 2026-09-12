@@ -18,6 +18,14 @@ function buildApp(overrides = {}) {
         throw new Error('updateAccount not stubbed');
       },
     },
+    transactionsService: {
+      createTransaction: async () => {
+        throw new Error('createTransaction not stubbed');
+      },
+      listTransactionsForAccount: async () => {
+        throw new Error('listTransactionsForAccount not stubbed');
+      },
+    },
     resolveCurrentUserId: async () => FAKE_USER_ID,
     ...overrides,
   });
@@ -60,6 +68,90 @@ describe('GET /health', () => {
     expect(res.status).toBe(503);
     expect(res.body.subsystems.postgres).toEqual({ status: 'error', message: 'connection refused' });
     expect(res.body.subsystems.redis).toEqual({ status: 'ok' });
+  });
+});
+
+describe('POST /transactions', () => {
+  test('creates a transaction and returns 201', async () => {
+    const app = buildApp({
+      transactionsService: {
+        createTransaction: async (userId, input) => ({ id: 'txn-1', account_id: input.account_id, ...input }),
+      },
+    });
+
+    const res = await request(app)
+      .post('/transactions')
+      .send({
+        account_id: 'acc-1',
+        transaction_date: '2026-01-15',
+        amount: 42.5,
+        type: 'debit',
+        merchant_raw: 'Blue Bottle Coffee',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 'txn-1', account_id: 'acc-1' });
+  });
+
+  test('returns 400 with the validation errors when the service rejects the input', async () => {
+    const app = buildApp({
+      transactionsService: {
+        createTransaction: async () => {
+          throw new ValidationError(['merchant_raw is required']);
+        },
+      },
+    });
+
+    const res = await request(app).post('/transactions').send({ account_id: 'acc-1' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toContain('merchant_raw is required');
+  });
+
+  test('returns 404 when the account does not belong to the current user (or does not exist)', async () => {
+    const app = buildApp({
+      transactionsService: {
+        createTransaction: async () => {
+          throw new NotFoundError('account not found');
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post('/transactions')
+      .send({ account_id: 'does-not-exist', transaction_date: '2026-01-15', amount: 10, type: 'debit', merchant_raw: 'Coffee' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('account not found');
+  });
+});
+
+describe('GET /accounts/:id/transactions', () => {
+  test('lists transactions for the given account', async () => {
+    const app = buildApp({
+      transactionsService: {
+        listTransactionsForAccount: async (userId, accountId) => [{ id: 'txn-1', account_id: accountId }],
+      },
+    });
+
+    const res = await request(app).get('/accounts/acc-1/transactions');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'txn-1', account_id: 'acc-1' }]);
+  });
+
+  test('returns 404 when the account does not belong to the current user (or does not exist)', async () => {
+    const app = buildApp({
+      transactionsService: {
+        listTransactionsForAccount: async () => {
+          throw new NotFoundError('account not found');
+        },
+      },
+    });
+
+    const res = await request(app).get('/accounts/does-not-exist/transactions');
+
+    expect(res.status).toBe(404);
   });
 });
 

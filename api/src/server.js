@@ -5,6 +5,7 @@ const { pool, pingPostgres } = require('./db');
 const { pingRedis } = require('./redis');
 const { runNoopJob, startNoopWorker } = require('./queue');
 const { createAccountsService } = require('./accounts/accountsService');
+const { createTransactionsService } = require('./transactions/transactionsService');
 const { getCurrentUserId } = require('./currentUser');
 
 startNoopWorker();
@@ -12,6 +13,7 @@ startNoopWorker();
 const app = createApp({
   checkHealth: () => checkHealth({ pingPostgres, pingRedis, runNoopJob }),
   accountsService: createAccountsService({ pool }),
+  transactionsService: createTransactionsService({ pool }),
   resolveCurrentUserId: () => getCurrentUserId(pool),
 });
 
