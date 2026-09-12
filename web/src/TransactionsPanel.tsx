@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { Button } from './components/ui/Button';
+import { Badge } from './components/ui/Badge';
 
 type Transaction = {
   id: string;
@@ -14,6 +16,10 @@ type Props = {
   accountId: string;
   accountLabel: string;
 };
+
+const inputClass =
+  'w-full rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 ' +
+  'focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500';
 
 async function parseErrorMessage(res: Response): Promise<string> {
   const body = await res.json().catch(() => ({}));
@@ -74,15 +80,16 @@ export function TransactionsPanel({ accountId, accountLabel }: Props) {
   }
 
   return (
-    <div style={{ marginTop: 12, paddingLeft: 16, borderLeft: '2px solid #ddd' }}>
-      <h3 style={{ marginBottom: 4 }}>Transactions — {accountLabel}</h3>
+    <div>
+      <h3 className="mb-3 text-sm font-medium text-slate-700">Transactions — {accountLabel}</h3>
 
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 320 }}>
+      <form onSubmit={handleSubmit} className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <input
           type="date"
           value={transactionDate}
           onChange={(e) => setTransactionDate(e.target.value)}
           required
+          className={inputClass}
         />
         <input
           type="number"
@@ -92,8 +99,9 @@ export function TransactionsPanel({ accountId, accountLabel }: Props) {
           onChange={(e) => setAmount(e.target.value)}
           placeholder="Amount (e.g. 42.50)"
           required
+          className={inputClass}
         />
-        <select value={type} onChange={(e) => setType(e.target.value as 'debit' | 'credit')}>
+        <select value={type} onChange={(e) => setType(e.target.value as 'debit' | 'credit')} className={inputClass}>
           <option value="debit">Debit (money out)</option>
           <option value="credit">Credit (money in)</option>
         </select>
@@ -102,24 +110,56 @@ export function TransactionsPanel({ accountId, accountLabel }: Props) {
           onChange={(e) => setMerchantRaw(e.target.value)}
           placeholder="Merchant (e.g. Blue Bottle Coffee)"
           required
+          className={inputClass}
         />
-        <button type="submit" disabled={loading}>
-          {loading ? 'Adding...' : 'Add Transaction'}
-        </button>
+        <div className="sm:col-span-2 lg:col-span-4">
+          <Button type="submit" disabled={loading}>
+            {loading ? 'Adding...' : 'Add Transaction'}
+          </Button>
+        </div>
       </form>
 
-      {error && <p style={{ color: 'crimson' }}>{error}</p>}
+      {error && <p className="mb-3 text-sm text-rose-600">{error}</p>}
 
-      <ul style={{ marginTop: 12, paddingLeft: 0, listStyle: 'none' }}>
-        {transactions.map((transaction) => (
-          <li key={transaction.id} style={{ marginBottom: 6 }}>
-            {transaction.transaction_date} — <strong>{transaction.merchant_raw}</strong>{' '}
-            {transaction.type === 'debit' ? '-' : '+'}
-            {Math.abs(Number(transaction.amount)).toFixed(2)} ({transaction.type})
-          </li>
-        ))}
-        {transactions.length === 0 && <li style={{ opacity: 0.6 }}>No transactions yet.</li>}
-      </ul>
+      {transactions.length === 0 ? (
+        <p className="text-sm text-slate-500">No transactions yet.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
+          <table className="w-full min-w-[480px] text-left text-sm">
+            <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-2 font-medium">Date</th>
+                <th className="px-3 py-2 font-medium">Merchant</th>
+                <th className="px-3 py-2 font-medium">Type</th>
+                <th className="px-3 py-2 font-medium text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transactions.map((transaction) => {
+                const signedAmount = Math.abs(Number(transaction.amount)).toFixed(2);
+                const isDebit = transaction.type === 'debit';
+                return (
+                  <tr key={transaction.id} className="border-b border-slate-100 last:border-0">
+                    <td className="px-3 py-2 text-slate-600">{transaction.transaction_date}</td>
+                    <td className="px-3 py-2 font-medium text-slate-900">{transaction.merchant_raw}</td>
+                    <td className="px-3 py-2">
+                      <Badge tone={isDebit ? 'muted' : 'success'}>{transaction.type}</Badge>
+                    </td>
+                    <td
+                      className={`px-3 py-2 text-right font-medium tabular-nums ${
+                        isDebit ? 'text-rose-600' : 'text-emerald-600'
+                      }`}
+                    >
+                      {isDebit ? '-' : '+'}
+                      {signedAmount}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
