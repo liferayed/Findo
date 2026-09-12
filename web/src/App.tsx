@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AccountsPanel } from './AccountsPanel';
 
 type SubsystemStatus = { status: 'ok' | 'error'; message?: string };
 type HealthResponse = {
@@ -52,6 +53,8 @@ export function App() {
           </ul>
         </div>
       )}
+
+      <AccountsPanel />
     </main>
   );
 }

@@ -21,13 +21,13 @@ function httpGet(url) {
   });
 }
 
-function httpPostJson(url, payload) {
+function httpRequestJson(method, url, payload) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(payload);
     const req = http.request(
       url,
       {
-        method: 'POST',
+        method,
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
       },
       (res) => {
@@ -40,6 +40,14 @@ function httpPostJson(url, payload) {
     req.write(data);
     req.end();
   });
+}
+
+function httpPostJson(url, payload) {
+  return httpRequestJson('POST', url, payload);
+}
+
+function httpPatchJson(url, payload) {
+  return httpRequestJson('PATCH', url, payload);
 }
 
 async function waitForServer(url, timeoutMs) {
@@ -99,6 +107,47 @@ async function run() {
 
     const chatShell = await httpGet(`http://localhost:${API_PORT}/chat/chat.html`);
     assertThat(chatShell.status === 200, 'chat shell static page is served');
+
+    const uniqueSuffix = Date.now();
+    const created = await httpPostJson(`http://localhost:${API_PORT}/accounts`, {
+      nickname: `Smoke-Test-Checking-${uniqueSuffix}`,
+      type: 'checking',
+      institution_name: 'Smoke Bank',
+      last_four: '4242',
+    });
+    assertThat(created.status === 201, 'POST /accounts returns 201');
+    const createdAccount = JSON.parse(created.body);
+    assertThat(createdAccount.nickname === `Smoke-Test-Checking-${uniqueSuffix}`, 'created account has the submitted nickname');
+
+    const list = await httpGet(`http://localhost:${API_PORT}/accounts`);
+    assertThat(list.status === 200, 'GET /accounts returns 200');
+    const accounts = JSON.parse(list.body);
+    assertThat(
+      accounts.some((a) => a.id === createdAccount.id),
+      'the newly created account appears in GET /accounts'
+    );
+
+    const updated = await httpPatchJson(`http://localhost:${API_PORT}/accounts/${createdAccount.id}`, {
+      is_active: false,
+    });
+    assertThat(updated.status === 200, 'PATCH /accounts/:id returns 200');
+    assertThat(JSON.parse(updated.body).is_active === false, 'PATCH /accounts/:id applies the update');
+
+    const duplicate = await httpPostJson(`http://localhost:${API_PORT}/accounts`, {
+      nickname: `Smoke-Test-Checking-${uniqueSuffix}`,
+      type: 'savings',
+      institution_name: 'Smoke Bank',
+    });
+    assertThat(duplicate.status === 409, 'POST /accounts rejects a duplicate nickname with 409');
+
+    const chatAccount = await httpPostJson(`http://localhost:${API_PORT}/chat/messages`, {
+      text: `Add my Smoke Chat Bank checking account, call it Smoke-Chat-Checking-${uniqueSuffix}`,
+    });
+    assertThat(chatAccount.status === 201, 'chat "add account" message creates an account (201)');
+    assertThat(
+      JSON.parse(chatAccount.body).reply.includes(`Smoke-Chat-Checking-${uniqueSuffix}`),
+      'chat reply confirms the account nickname'
+    );
 
     console.log('\nSmoke test passed.');
     api.kill('SIGTERM');

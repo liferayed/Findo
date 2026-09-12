@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       '/health': 'http://localhost:3000',
       '/chat': 'http://localhost:3000',
+      '/accounts': 'http://localhost:3000',
     },
   },
 });
