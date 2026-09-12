@@ -1,3 +1,5 @@
+const { coerceToPositiveNumber } = require('../llm/coerceToPositiveNumber');
+
 const VALID_TYPES = new Set(['debit', 'credit']);
 
 function normalizedString(value) {
@@ -18,7 +20,7 @@ function normalizeExtraction(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
 
   const isTransaction = source.is_transaction === true;
-  const amount = typeof source.amount === 'number' && Number.isFinite(source.amount) ? source.amount : null;
+  const amount = coerceToPositiveNumber(source.amount);
   const type = VALID_TYPES.has(source.type) ? source.type : null;
   const merchant = normalizedString(source.merchant);
   const dateHint = normalizedString(source.date_hint);

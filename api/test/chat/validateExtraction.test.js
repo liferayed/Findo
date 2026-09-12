@@ -41,6 +41,15 @@ describe('normalizeExtraction', () => {
     expect(normalizeExtraction({ is_transaction: true, amount: 'a lot', type: 'debit' }).isActionable).toBe(false);
   });
 
+  // Proactive fix, not (yet) an observed chat-side failure: F1.6's receipt parser hit the exact
+  // same bug class (a numeric field returned as a JSON string by a "number"-schema'd model) on
+  // a real photo. Applying the same coercion here before this codebase hits it for chat too.
+  test('an amount returned as a numeric string is still treated as actionable', () => {
+    const result = normalizeExtraction({ is_transaction: true, amount: '12.50', type: 'debit' });
+    expect(result.isActionable).toBe(true);
+    expect(result.amount).toBe(12.5);
+  });
+
   test('a missing or invalid type value is rejected as not-actionable', () => {
     expect(normalizeExtraction({ is_transaction: true, amount: 10, type: 'transfer' }).isActionable).toBe(false);
     expect(normalizeExtraction({ is_transaction: true, amount: 10, type: null }).isActionable).toBe(false);

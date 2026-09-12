@@ -1,29 +1,10 @@
 const { parseReceiptDate } = require('./parseReceiptDate');
+const { coerceToPositiveNumber } = require('../llm/coerceToPositiveNumber');
 
 const FALLBACK_MERCHANT = 'Receipt';
 
 function normalizedString(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
-}
-
-// The model doesn't always respect the "number" instruction in the prompt schema — observed on
-// a real photographed receipt returning `"total": "11.29"` as a JSON string. Accept a genuine
-// number OR a numeric string (optionally with a leading "$" and/or thousands commas, since a
-// real-world money value can come back formatted either way) rather than rejecting a perfectly
-// legible receipt just because the model quoted the number.
-function coerceToPositiveNumber(value) {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && value > 0 ? value : null;
-  }
-  if (typeof value === 'string') {
-    const cleaned = value.trim().replace(/^\$/, '').replace(/,/g, '');
-    if (cleaned === '') {
-      return null;
-    }
-    const parsed = Number(cleaned);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  }
-  return null;
 }
 
 function normalizeLineItems(rawLineItems) {
