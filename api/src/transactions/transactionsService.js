@@ -98,11 +98,42 @@ function createTransactionsService({ pool }) {
     return rows;
   }
 
+  async function listTransactions(userId, { from, to, accountId } = {}) {
+    const conditions = ['a.user_id = $1'];
+    const values = [userId];
+
+    if (from) {
+      values.push(from);
+      conditions.push(`t.transaction_date >= $${values.length}`);
+    }
+    if (to) {
+      values.push(to);
+      conditions.push(`t.transaction_date <= $${values.length}`);
+    }
+    if (accountId) {
+      values.push(accountId);
+      conditions.push(`t.account_id = $${values.length}`);
+    }
+
+    const { rows } = await pool.query(
+      `SELECT t.id, t.account_id, a.nickname AS account_nickname, t.transaction_date, t.posted_date, t.amount,
+              t.original_amount, t.merchant_raw, t.merchant_normalized, t.category_id, t.type, t.is_manual,
+              t.reconciliation_status, t.notes, t.created_at
+       FROM transactions t
+       JOIN accounts a ON a.id = t.account_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY t.transaction_date DESC, t.created_at DESC`,
+      values
+    );
+    return rows;
+  }
+
   return {
     createTransaction,
     createTransactionFromChat,
     createTransactionFromReceipt,
     listTransactionsForAccount,
+    listTransactions,
     findOwnedAccount,
   };
 }

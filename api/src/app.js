@@ -116,6 +116,16 @@ function createApp({
     }
   });
 
+  app.get('/transactions', async (req, res) => {
+    const userId = await resolveCurrentUserId();
+    const transactions = await transactionsService.listTransactions(userId, {
+      from: req.query.from,
+      to: req.query.to,
+      accountId: req.query.account_id,
+    });
+    res.status(200).json(transactions);
+  });
+
   app.post('/documents/extract', uploadReceiptFile, async (req, res) => {
     try {
       const userId = await resolveCurrentUserId();

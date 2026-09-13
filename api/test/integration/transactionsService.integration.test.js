@@ -20,11 +20,12 @@ async function deleteTestUser(userId) {
 
 describe('transactionsService (against real Postgres)', () => {
   let userId;
+  let account;
   let accountId;
 
   beforeEach(async () => {
     userId = await createTestUser(`test-${Date.now()}-${Math.random()}@findo.test`);
-    const account = await accountsService.createAccount(userId, {
+    account = await accountsService.createAccount(userId, {
       nickname: 'Chase-Checking',
       type: 'checking',
       institution_name: 'Chase',
@@ -242,5 +243,51 @@ describe('transactionsService (against real Postgres)', () => {
     } finally {
       await deleteTestUser(otherUserId);
     }
+  });
+
+  test('listTransactions lists transactions across all of the user\'s accounts, most recent first', async () => {
+    const rand = Math.random();
+    const accountB = await accountsService.createAccount(userId, { type: 'credit_card', institution_name: 'Amex', nickname: `Amex-${rand}`, last_four: '1093' });
+    await service.createTransaction(userId, { account_id: account.id, transaction_date: '2026-09-01', amount: 10, type: 'debit', merchant_raw: 'A' });
+    await service.createTransaction(userId, { account_id: accountB.id, transaction_date: '2026-09-05', amount: 20, type: 'debit', merchant_raw: 'B' });
+
+    const results = await service.listTransactions(userId);
+
+    expect(results).toHaveLength(2);
+    expect(results[0].merchant_raw).toBe('B'); // most recent date first
+    expect(results[0].account_nickname).toBe(accountB.nickname);
+  });
+
+  test('listTransactions filters by date range', async () => {
+    await service.createTransaction(userId, { account_id: account.id, transaction_date: '2026-01-01', amount: 10, type: 'debit', merchant_raw: 'Old' });
+    await service.createTransaction(userId, { account_id: account.id, transaction_date: '2026-09-05', amount: 20, type: 'debit', merchant_raw: 'Recent' });
+
+    const results = await service.listTransactions(userId, { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].merchant_raw).toBe('Recent');
+  });
+
+  test('listTransactions filters by account_id', async () => {
+    const rand = Math.random();
+    const accountB = await accountsService.createAccount(userId, { type: 'credit_card', institution_name: 'Amex', nickname: `Amex2-${rand}`, last_four: '1093' });
+    await service.createTransaction(userId, { account_id: account.id, transaction_date: '2026-09-01', amount: 10, type: 'debit', merchant_raw: 'A' });
+    await service.createTransaction(userId, { account_id: accountB.id, transaction_date: '2026-09-01', amount: 20, type: 'debit', merchant_raw: 'B' });
+
+    const results = await service.listTransactions(userId, { accountId: accountB.id });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].merchant_raw).toBe('B');
+  });
+
+  test('listTransactions never returns another user\'s transactions', async () => {
+    const otherUserId = await createTestUser(`other-${Date.now()}-${Math.random()}@findo.test`);
+    const otherAccount = await accountsService.createAccount(otherUserId, { type: 'checking', institution_name: 'Chase', nickname: `Other-${Math.random()}`, last_four: '0000' });
+    await service.createTransaction(otherUserId, { account_id: otherAccount.id, transaction_date: '2026-09-01', amount: 10, type: 'debit', merchant_raw: 'Not Mine' });
+
+    const results = await service.listTransactions(userId);
+
+    expect(results.find((t) => t.merchant_raw === 'Not Mine')).toBeUndefined();
+    await deleteTestUser(otherUserId);
   });
 });
