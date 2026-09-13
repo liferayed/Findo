@@ -14,14 +14,15 @@ const EXTRACTION_TIMEOUT_MS = 30000;
 const PROMPT_TEMPLATE = `Extract the following fields from this receipt image. Respond with ONLY a JSON object, no other text.
 
 Schema:
-{"merchant": string or null, "date": string or null, "total": number or null, "line_items": [{"description": string, "amount": number}] or []}
+{"merchant": string or null, "date": string or null, "total": number or null, "line_items": [{"description": string, "amount": number}] or [], "card_last_four": string or null}
 
 Rules:
 - If the image is too blurry, dark, cut off, or otherwise not a readable receipt, return all fields as null/empty (total: null).
 - merchant: the store/business name at the top of the receipt.
 - total: the final total/amount charged, not the subtotal, however it is labeled (e.g. "Total", "AMT DUE", "Balance"). Only a valid positive number if you can actually read it; null otherwise.
 - date: the transaction date shown on the receipt, if legible.
-- line_items: each purchased item and its price, if legible. Empty array if not legible or not itemized.`;
+- line_items: each purchased item and its price, if legible. Empty array if not legible or not itemized.
+- card_last_four: the last 4 digits of the payment card if printed on the receipt (e.g. "VISA ****4821" or "ending in 4821"), as a 4-character string. Null if not present or not legible.`;
 
 // Passed as `format` instead of the string "json" — a real JSON Schema, so Ollama constrains
 // generation to conform to it (grammar-constrained decoding), not just a prompt instruction the
@@ -47,8 +48,9 @@ const RESPONSE_SCHEMA = {
         required: ['description', 'amount'],
       },
     },
+    card_last_four: { type: ['string', 'null'] },
   },
-  required: ['merchant', 'date', 'total', 'line_items'],
+  required: ['merchant', 'date', 'total', 'line_items', 'card_last_four'],
 };
 
 /**
