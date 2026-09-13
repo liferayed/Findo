@@ -15,12 +15,13 @@ const { createReceiptUploadHandler } = require('./documents/receiptUploadService
 startNoopWorker();
 
 const transactionsService = createTransactionsService({ pool });
+const accountsService = createAccountsService({ pool });
 const chatTransactionHandler = createChatTransactionHandler({ pool, transactionsService, extractTransaction });
-const receiptUploadHandler = createReceiptUploadHandler({ pool, transactionsService, extractReceipt });
+const receiptUploadHandler = createReceiptUploadHandler({ pool, transactionsService, accountsService, extractReceipt });
 
 const app = createApp({
   checkHealth: () => checkHealth({ pingPostgres, pingRedis, runNoopJob }),
-  accountsService: createAccountsService({ pool }),
+  accountsService,
   transactionsService,
   resolveCurrentUserId: () => getCurrentUserId(pool),
   chatTransactionHandler: chatTransactionHandler.handleMessage,

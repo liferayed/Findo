@@ -91,13 +91,46 @@
 
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('account_id', accountId);
       formData.append('channel', 'chat');
 
+      // Chat has no confirm-modal UI to pause at (out of scope for the 2026-09-13 UI redesign),
+      // so it calls extract then confirm back-to-back here, immediately, with whatever the
+      // vision model extracted — functionally equivalent to the old single-call /documents
+      // upload from the user's point of view.
       try {
-        const res = await fetch('/documents', { method: 'POST', body: formData });
-        const data = await res.json();
-        append('Findo', res.ok ? data.message : `Error: ${data.error || (data.errors && data.errors.join(', '))}`);
+        const extractRes = await fetch('/documents/extract', { method: 'POST', body: formData });
+        const extractData = await extractRes.json();
+        if (!extractRes.ok) {
+          append('Findo', `Error: ${extractData.error || (extractData.errors && extractData.errors.join(', '))}`);
+          return;
+        }
+        if (!extractData.is_readable) {
+          append(
+            'Findo',
+            "I couldn't read that receipt clearly — could you reshare a clearer photo, or enter it manually?"
+          );
+          return;
+        }
+
+        const confirmRes = await fetch('/documents/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            file_ref: extractData.file_ref,
+            original_filename: extractData.original_filename,
+            channel: 'chat',
+            account_id: extractData.detected_account_id || accountId,
+            merchant: extractData.extraction.merchant,
+            transaction_date: extractData.extraction.transaction_date,
+            amount: extractData.extraction.total,
+            line_items: extractData.extraction.line_items,
+          }),
+        });
+        const confirmData = await confirmRes.json();
+        append(
+          'Findo',
+          confirmRes.ok ? confirmData.message : `Error: ${confirmData.error || (confirmData.errors && confirmData.errors.join(', '))}`
+        );
       } catch (err) {
         append('Findo', `Error reaching the API: ${err.message}`);
       }

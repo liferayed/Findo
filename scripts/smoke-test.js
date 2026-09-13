@@ -304,9 +304,13 @@ async function run() {
 
       const receiptFixturesDir = path.join(REPO_ROOT, 'api', 'test', 'fixtures', 'receipts');
 
-      const clearReceiptUpload = await httpPostMultipart(
-        `http://localhost:${API_PORT}/documents`,
-        { account_id: receiptAccountBody.id, channel: 'web_upload' },
+      // F1.6's single-call /documents upload was split into /documents/extract +
+      // /documents/confirm (Task 2 of the 2026-09-13 UI redesign) so nothing is written to the
+      // DB until the user reviews/confirms — the smoke test below drives both calls
+      // back-to-back, same as chat.html does, to exercise the whole round trip as a black box.
+      const clearReceiptExtract = await httpPostMultipart(
+        `http://localhost:${API_PORT}/documents/extract`,
+        { channel: 'web_upload' },
         {
           name: 'file',
           filename: 'clear-coffee-receipt.png',
@@ -314,9 +318,24 @@ async function run() {
           data: fs.readFileSync(path.join(receiptFixturesDir, 'clear-coffee-receipt.png')),
         }
       );
-      assertThat(clearReceiptUpload.status === 201, 'POST /documents with a clear receipt image returns 201');
-      const clearReceiptBody = JSON.parse(clearReceiptUpload.body);
-      assertThat(clearReceiptBody.transaction !== null, 'a legible receipt upload creates a transaction');
+      assertThat(clearReceiptExtract.status === 200, 'POST /documents/extract with a clear receipt image returns 200');
+      const clearReceiptExtractBody = JSON.parse(clearReceiptExtract.body);
+      assertThat(clearReceiptExtractBody.is_readable === true, 'a legible receipt is reported as readable');
+      assertThat(clearReceiptExtractBody.extraction !== null, 'a legible receipt returns extraction data');
+
+      const clearReceiptConfirm = await httpPostJson(`http://localhost:${API_PORT}/documents/confirm`, {
+        file_ref: clearReceiptExtractBody.file_ref,
+        original_filename: clearReceiptExtractBody.original_filename,
+        channel: 'web_upload',
+        account_id: receiptAccountBody.id,
+        merchant: clearReceiptExtractBody.extraction.merchant,
+        transaction_date: clearReceiptExtractBody.extraction.transaction_date,
+        amount: clearReceiptExtractBody.extraction.total,
+        line_items: clearReceiptExtractBody.extraction.line_items,
+      });
+      assertThat(clearReceiptConfirm.status === 201, 'POST /documents/confirm for a legible receipt returns 201');
+      const clearReceiptBody = JSON.parse(clearReceiptConfirm.body);
+      assertThat(clearReceiptBody.transaction !== null, 'confirming a legible receipt creates a transaction');
       assertThat(
         Number(clearReceiptBody.transaction.amount) === -15.75,
         'the receipt-created transaction has the correct signed amount'
@@ -324,12 +343,12 @@ async function run() {
       assertThat(clearReceiptBody.transaction.is_manual === false, 'the receipt-created transaction is marked is_manual: false');
       assertThat(
         typeof clearReceiptBody.message === 'string' && clearReceiptBody.message.length > 0,
-        'a successful receipt upload returns a confirmation message'
+        'a successful receipt confirm returns a confirmation message'
       );
 
-      const illegibleUpload = await httpPostMultipart(
-        `http://localhost:${API_PORT}/documents`,
-        { account_id: receiptAccountBody.id, channel: 'web_upload' },
+      const illegibleExtract = await httpPostMultipart(
+        `http://localhost:${API_PORT}/documents/extract`,
+        { channel: 'web_upload' },
         {
           name: 'file',
           filename: 'illegible-noise.png',
@@ -337,15 +356,17 @@ async function run() {
           data: fs.readFileSync(path.join(receiptFixturesDir, 'illegible-noise.png')),
         }
       );
-      assertThat(illegibleUpload.status === 200, 'POST /documents with an illegible receipt returns 200, not an error');
-      assertThat(JSON.parse(illegibleUpload.body).transaction === null, 'an illegible receipt does not create a transaction');
+      assertThat(illegibleExtract.status === 200, 'POST /documents/extract with an illegible receipt returns 200, not an error');
+      const illegibleExtractBody = JSON.parse(illegibleExtract.body);
+      assertThat(illegibleExtractBody.is_readable === false, 'an illegible receipt is reported as not readable');
+      assertThat(illegibleExtractBody.extraction === null, 'an illegible receipt returns no extraction data');
 
-      const badTypeUpload = await httpPostMultipart(
-        `http://localhost:${API_PORT}/documents`,
-        { account_id: receiptAccountBody.id },
+      const badTypeExtract = await httpPostMultipart(
+        `http://localhost:${API_PORT}/documents/extract`,
+        {},
         { name: 'file', filename: 'notes.txt', contentType: 'text/plain', data: Buffer.from('not an image') }
       );
-      assertThat(badTypeUpload.status === 400, 'POST /documents rejects a non-image file with 400');
+      assertThat(badTypeExtract.status === 400, 'POST /documents/extract rejects a non-image file with 400');
     } else {
       console.log('  skip - receipt upload & parsing (Ollama not reachable, expected in CI)');
     }

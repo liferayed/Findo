@@ -11,7 +11,7 @@ const FIXTURES_DIR = path.join(__dirname, '..', 'fixtures', 'receipts');
 
 const accountsService = createAccountsService({ pool });
 const transactionsService = createTransactionsService({ pool });
-const receiptUploadHandler = createReceiptUploadHandler({ pool, transactionsService, extractReceipt });
+const receiptUploadHandler = createReceiptUploadHandler({ pool, transactionsService, accountsService, extractReceipt });
 
 function loadFixture(filename, mimetype = 'image/png') {
   const buffer = fs.readFileSync(path.join(FIXTURES_DIR, filename));
@@ -75,42 +75,62 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
     await pool.end();
   });
 
-  test('a clear, legible receipt creates a debit transaction with full provenance', async () => {
+  test('extract then confirm creates a transaction with correct provenance', async () => {
     const file = loadFixture('clear-coffee-receipt.png');
 
-    const start = Date.now();
-    const result = await receiptUploadHandler.handleUpload(userId, { file, accountId: account.id, channel: 'chat' });
-    const latencyMs = Date.now() - start;
-    console.log(`[latency] warm vision extraction (clear receipt) took ${latencyMs}ms`);
+    const extractResult = await receiptUploadHandler.handleExtract(userId, { file, channel: 'web_upload' });
+    expect(extractResult.isReadable).toBe(true);
+    expect(extractResult.fileRef).toMatch(/^api\/uploads\/receipts\//);
 
-    expect(result.statusCode).toBe(201);
-    expect(result.transaction).not.toBeNull();
-    expect(result.transaction.type).toBe('debit');
-    expect(Number(result.transaction.amount)).toBe(-15.75);
-    expect(result.transaction.is_manual).toBe(false);
-    expect(result.transaction.reconciliation_status).toBe('confirmed');
-    expect(result.message).toEqual(expect.stringContaining('15.75'));
+    const sharedItemsBefore = await sharedItemsForUser(userId);
+    expect(sharedItemsBefore).toHaveLength(0); // handleExtract must not write to the DB
 
-    const items = await sharedItemsForUser(userId);
-    expect(items).toHaveLength(1);
-    expect(items[0].channel).toBe('chat');
-    expect(items[0].content_type).toBe('file');
-    expect(items[0].parse_status).toBe('parsed');
-    expect(items[0].file_ref).toEqual(expect.stringContaining('api/uploads/receipts/'));
+    const confirmResult = await receiptUploadHandler.handleConfirm(userId, {
+      fileRef: extractResult.fileRef,
+      originalFilename: file.originalname,
+      channel: 'web_upload',
+      accountId: account.id,
+      merchantRaw: extractResult.extraction.merchant,
+      transactionDate: extractResult.extraction.transactionDate,
+      amount: extractResult.extraction.total,
+      lineItems: extractResult.extraction.lineItems,
+    });
 
-    const document = await documentForSharedItem(items[0].id);
+    expect(confirmResult.statusCode).toBe(201);
+    expect(confirmResult.transaction.account_id).toBe(account.id);
+
+    const sharedItems = await sharedItemsForUser(userId);
+    expect(sharedItems).toHaveLength(1);
+    expect(sharedItems[0].parse_status).toBe('parsed');
+    expect(sharedItems[0].original_filename).toBe('clear-coffee-receipt.png');
+
+    const document = await documentForSharedItem(sharedItems[0].id);
     expect(document).not.toBeNull();
-    expect(document.document_type).toBe('receipt');
-    expect(document.page_count).toBe(1);
 
-    const sources = await transactionSourcesFor(result.transaction.id);
+    const sources = await transactionSourcesFor(confirmResult.transaction.id);
     expect(sources).toHaveLength(1);
-    expect(sources[0].shared_item_id).toBe(items[0].id);
     expect(sources[0].role).toBe('origin');
+  });
 
-    const transactions = await transactionsService.listTransactionsForAccount(userId, account.id);
-    expect(transactions).toHaveLength(1);
-    expect(transactions[0].id).toBe(result.transaction.id);
+  test('handleExtract never persists, so an abandoned extraction leaves no shared_items row', async () => {
+    const file = loadFixture('clear-coffee-receipt.png');
+    await receiptUploadHandler.handleExtract(userId, { file, channel: 'web_upload' });
+    expect(await sharedItemsForUser(userId)).toHaveLength(0);
+  });
+
+  test('handleConfirm on manually-entered fields (no vision extraction involved) still creates a transaction', async () => {
+    const result = await receiptUploadHandler.handleConfirm(userId, {
+      fileRef: 'api/uploads/receipts/does-not-need-to-exist-for-this-test.png',
+      originalFilename: 'blurry.png',
+      channel: 'web_upload',
+      accountId: account.id,
+      merchantRaw: 'Manually Entered Store',
+      transactionDate: '2026-09-01',
+      amount: 12.5,
+      lineItems: [],
+    });
+    expect(result.statusCode).toBe(201);
+    expect(result.transaction.merchant_raw).toBe('Manually Entered Store');
   });
 
   // Proves the "gate on `total`, not a self-reported legibility flag" rule matters in
@@ -119,10 +139,18 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
   test('an unusual-layout receipt (no "Total:" label) still extracts correctly', async () => {
     const file = loadFixture('unusual-layout-target.png');
 
-    const result = await receiptUploadHandler.handleUpload(userId, {
-      file,
-      accountId: account.id,
+    const extractResult = await receiptUploadHandler.handleExtract(userId, { file, channel: 'web_upload' });
+    expect(extractResult.isReadable).toBe(true);
+
+    const result = await receiptUploadHandler.handleConfirm(userId, {
+      fileRef: extractResult.fileRef,
+      originalFilename: file.originalname,
       channel: 'web_upload',
+      accountId: account.id,
+      merchantRaw: extractResult.extraction.merchant,
+      transactionDate: extractResult.extraction.transactionDate,
+      amount: extractResult.extraction.total,
+      lineItems: extractResult.extraction.lineItems,
     });
 
     expect(result.statusCode).toBe(201);
@@ -145,7 +173,19 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
   test('a receipt whose total the model returns as a numeric string is still processed correctly (real-world regression)', async () => {
     const file = loadFixture('starbucks-string-total-regression.png');
 
-    const result = await receiptUploadHandler.handleUpload(userId, { file, accountId: account.id, channel: 'web_upload' });
+    const extractResult = await receiptUploadHandler.handleExtract(userId, { file, channel: 'web_upload' });
+    expect(extractResult.isReadable).toBe(true);
+
+    const result = await receiptUploadHandler.handleConfirm(userId, {
+      fileRef: extractResult.fileRef,
+      originalFilename: file.originalname,
+      channel: 'web_upload',
+      accountId: account.id,
+      merchantRaw: extractResult.extraction.merchant,
+      transactionDate: extractResult.extraction.transactionDate,
+      amount: extractResult.extraction.total,
+      lineItems: extractResult.extraction.lineItems,
+    });
 
     expect(result.statusCode).toBe(201);
     expect(result.transaction).not.toBeNull();
@@ -153,39 +193,44 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
     expect(result.transaction.merchant_raw).toEqual(expect.stringContaining('STARBUCKS'));
   });
 
-  test('an illegible receipt is treated as unreadable: no transaction, shared_items marked failed', async () => {
+  test('an illegible receipt is treated as unreadable by handleExtract: no extraction, nothing written', async () => {
     const file = loadFixture('illegible-noise.png');
 
-    const result = await receiptUploadHandler.handleUpload(userId, { file, accountId: account.id, channel: 'chat' });
+    const extractResult = await receiptUploadHandler.handleExtract(userId, { file, channel: 'chat' });
 
-    expect(result.statusCode).toBe(200);
-    expect(result.transaction).toBeNull();
-    expect(result.message.toLowerCase()).toEqual(expect.stringContaining("couldn't read"));
+    expect(extractResult.isReadable).toBe(false);
+    expect(extractResult.extraction).toBeNull();
+    expect(extractResult.detectedAccountId).toBeNull();
 
     const items = await sharedItemsForUser(userId);
-    expect(items).toHaveLength(1);
-    expect(items[0].parse_status).toBe('failed');
-
-    const document = await documentForSharedItem(items[0].id);
-    expect(document).not.toBeNull();
-    expect(document.document_type).toBe('receipt');
+    expect(items).toHaveLength(0);
 
     const transactions = await transactionsService.listTransactionsForAccount(userId, account.id);
     expect(transactions).toHaveLength(0);
   });
 
-  test('a nonexistent account_id is rejected with no orphan shared_items/documents rows and no transaction', async () => {
+  test('a nonexistent account_id is rejected by handleConfirm with no orphan shared_items/documents rows and no transaction', async () => {
     const file = loadFixture('clear-coffee-receipt.png');
+    const extractResult = await receiptUploadHandler.handleExtract(userId, { file, channel: 'chat' });
 
     await expect(
-      receiptUploadHandler.handleUpload(userId, { file, accountId: '00000000-0000-0000-0000-000000000000', channel: 'chat' })
+      receiptUploadHandler.handleConfirm(userId, {
+        fileRef: extractResult.fileRef,
+        originalFilename: file.originalname,
+        channel: 'chat',
+        accountId: '00000000-0000-0000-0000-000000000000',
+        merchantRaw: extractResult.extraction.merchant,
+        transactionDate: extractResult.extraction.transactionDate,
+        amount: extractResult.extraction.total,
+        lineItems: extractResult.extraction.lineItems,
+      })
     ).rejects.toBeInstanceOf(NotFoundError);
 
     const items = await sharedItemsForUser(userId);
     expect(items).toHaveLength(0);
   });
 
-  test("another user's account_id (not owned by this user) is rejected the same way as nonexistent", async () => {
+  test("another user's account_id (not owned by this user) is rejected by handleConfirm the same way as nonexistent", async () => {
     const otherUserId = await createTestUser(`f16-other-${Date.now()}@findo.test`);
     try {
       const otherAccount = await accountsService.createAccount(otherUserId, {
@@ -194,9 +239,19 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
         institution_name: 'Wells Fargo',
       });
       const file = loadFixture('clear-coffee-receipt.png');
+      const extractResult = await receiptUploadHandler.handleExtract(userId, { file, channel: 'chat' });
 
       await expect(
-        receiptUploadHandler.handleUpload(userId, { file, accountId: otherAccount.id, channel: 'chat' })
+        receiptUploadHandler.handleConfirm(userId, {
+          fileRef: extractResult.fileRef,
+          originalFilename: file.originalname,
+          channel: 'chat',
+          accountId: otherAccount.id,
+          merchantRaw: extractResult.extraction.merchant,
+          transactionDate: extractResult.extraction.transactionDate,
+          amount: extractResult.extraction.total,
+          lineItems: extractResult.extraction.lineItems,
+        })
       ).rejects.toBeInstanceOf(NotFoundError);
 
       const items = await sharedItemsForUser(userId);
@@ -208,24 +263,34 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
     }
   });
 
-  test('an inactive account is rejected with no orphan rows and no transaction', async () => {
+  test('an inactive account is rejected by handleConfirm with no orphan rows and no transaction', async () => {
     await accountsService.updateAccount(userId, account.id, { is_active: false });
     const file = loadFixture('clear-coffee-receipt.png');
+    const extractResult = await receiptUploadHandler.handleExtract(userId, { file, channel: 'chat' });
 
     await expect(
-      receiptUploadHandler.handleUpload(userId, { file, accountId: account.id, channel: 'chat' })
+      receiptUploadHandler.handleConfirm(userId, {
+        fileRef: extractResult.fileRef,
+        originalFilename: file.originalname,
+        channel: 'chat',
+        accountId: account.id,
+        merchantRaw: extractResult.extraction.merchant,
+        transactionDate: extractResult.extraction.transactionDate,
+        amount: extractResult.extraction.total,
+        lineItems: extractResult.extraction.lineItems,
+      })
     ).rejects.toBeInstanceOf(NotFoundError);
 
     const items = await sharedItemsForUser(userId);
     expect(items).toHaveLength(0);
   });
 
-  test('a non-image file (.txt) is rejected with a ValidationError and no DB writes at all', async () => {
+  test('a non-image file (.txt) is rejected by handleExtract with a ValidationError and no DB writes at all', async () => {
     const file = { buffer: Buffer.from('just some text, not an image'), mimetype: 'text/plain', size: 29 };
 
-    await expect(
-      receiptUploadHandler.handleUpload(userId, { file, accountId: account.id, channel: 'chat' })
-    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(receiptUploadHandler.handleExtract(userId, { file, channel: 'chat' })).rejects.toBeInstanceOf(
+      ValidationError
+    );
 
     const items = await sharedItemsForUser(userId);
     expect(items).toHaveLength(0);
@@ -233,12 +298,12 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
     expect(transactions).toHaveLength(0);
   });
 
-  test('an oversized file is rejected with a ValidationError and no DB writes at all', async () => {
+  test('an oversized file is rejected by handleExtract with a ValidationError and no DB writes at all', async () => {
     const file = { buffer: Buffer.alloc(10 * 1024 * 1024 + 1), mimetype: 'image/png', size: 10 * 1024 * 1024 + 1 };
 
-    await expect(
-      receiptUploadHandler.handleUpload(userId, { file, accountId: account.id, channel: 'chat' })
-    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(receiptUploadHandler.handleExtract(userId, { file, channel: 'chat' })).rejects.toBeInstanceOf(
+      ValidationError
+    );
 
     const items = await sharedItemsForUser(userId);
     expect(items).toHaveLength(0);
