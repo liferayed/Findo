@@ -15,27 +15,16 @@ Each feature is built on its own branch off `main` (e.g. `feature/f1-2-account-m
 
 ## Local setup
 
-Also requires [Ollama](https://ollama.com) running locally with `llama3.2:3b` (chat parsing) and `qwen2.5vl:3b` (receipt parsing) pulled — `ollama pull llama3.2:3b && ollama pull qwen2.5vl:3b`. See `api/.env.example` for `OLLAMA_BASE_URL`/`OLLAMA_MODEL`/`OLLAMA_VISION_MODEL` if you're pointing at a different host/model.
+Everything — Postgres, Redis, the api, and the web app — runs in Docker containers via Docker Compose. The only thing you need installed on the host is **Docker** (Docker Desktop on Mac/Windows, or Docker Engine + Compose on Linux). The one exception is [Ollama](https://ollama.com): it stays host-native (Docker Desktop on Mac can't pass through GPU acceleration to a container), running with `llama3.2:3b` (chat parsing) and `qwen2.5vl:3b` (receipt parsing) pulled — `ollama pull llama3.2:3b && ollama pull qwen2.5vl:3b`. The api container reaches it at `http://host.docker.internal:11434` automatically; see `api/.env.example` if you're pointing at a different host/model.
 
 ### Quick start (Makefile)
 
 ```bash
-make setup    # docker compose up + npm install + migrate + seed (first time only)
-make dev      # runs the API and web dev servers together in this terminal (Ctrl+C stops both)
+make setup    # build images, start everything, migrate, seed (first time only)
+make dev      # attach to the running logs for Postgres, Redis, api, and web (Ctrl+C stops all)
 ```
 
-Then open http://localhost:5173 (web) or http://localhost:3000/chat/chat.html (chat shell). Run `make help` to see every available command (`dev-api`/`dev-web` to run them separately in their own terminals, `test`/`test-integration`/`test-integration-llm`/`smoke`/`build`, `check` to run everything CI runs, `reset-db` to wipe and reseed the local dev database).
-
-### Equivalent plain npm commands
-
-```bash
-docker compose up -d      # Postgres + Redis
-npm install
-npm run migrate           # apply DB migrations
-npm run seed               # seed the single dev user
-npm run dev:api            # http://localhost:3000
-npm run dev:web            # http://localhost:5173
-```
+Then open http://localhost:5173 (web) or http://localhost:3000/chat/chat.html (chat shell). Run `make help` to see every available command (`up`/`down` to start/stop everything in the background, `lint`/`test`/`test-integration`/`test-integration-llm`/`smoke`/`build`, `check` to run everything CI runs, `reset-db` to wipe and reseed the local dev database). Every one of these runs inside the containers — there's no native/local-Node equivalent anymore.
 
 ## Tests
 
