@@ -28,10 +28,10 @@ seed: ## Seed the single dev user (inside the api container)
 	docker compose exec api npm run seed
 
 lint: ## Lint the whole repo (inside the api container)
-	docker compose exec api npm run lint
+	docker compose exec --workdir /app api npm run lint
 
 test: ## Lint + unit tests, both workspaces (inside their containers)
-	docker compose exec api npm run lint
+	docker compose exec --workdir /app api npm run lint
 	docker compose exec api npm test
 	docker compose exec web npm test
 
@@ -42,7 +42,7 @@ test-integration-llm: ## LLM-dependent integration tests (needs Ollama running o
 	docker compose exec api npm run test:integration:llm
 
 smoke: ## Boot the real server and hit it over HTTP (inside the api container)
-	docker compose exec api npm run smoke
+	docker compose exec --workdir /app api npm run smoke
 
 build: ## Type-check + build the web app (inside the web container)
 	docker compose exec web npm run build
