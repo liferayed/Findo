@@ -1,16 +1,18 @@
 import type { HTMLAttributes } from 'react';
 
-type Tone = 'neutral' | 'success' | 'muted' | 'accent';
+type Tone = 'neutral' | 'success' | 'muted' | 'accent' | 'warning' | 'danger';
 
 type Props = HTMLAttributes<HTMLSpanElement> & {
   tone?: Tone;
 };
 
 const tones: Record<Tone, string> = {
-  neutral: 'bg-slate-100 text-slate-700',
-  success: 'bg-emerald-50 text-emerald-700',
-  muted: 'bg-slate-100 text-slate-500',
-  accent: 'bg-indigo-50 text-indigo-700',
+  neutral: 'bg-stone-100 text-stone-700',
+  success: 'bg-emerald-50 text-emerald-800',
+  muted: 'bg-stone-100 text-stone-500',
+  accent: 'bg-amber-50 text-amber-900',
+  warning: 'bg-amber-50 text-amber-800',
+  danger: 'bg-rose-50 text-rose-700',
 };
 
 export function Badge({ tone = 'neutral', className = '', ...rest }: Props) {
