@@ -30,13 +30,13 @@ Then open http://localhost:5173 (web) or http://localhost:3000/chat/chat.html (c
 
 ```bash
 make test               # lint + unit tests
-make test-integration   # integration tests against live Postgres/Redis (needs docker compose up)
+make test-integration   # integration tests against live Postgres/Redis
 make test-integration-llm  # LLM-dependent integration tests (needs Ollama running locally) — NOT run in CI
 make smoke               # boots the real server, hits it over HTTP; LLM-dependent assertions auto-skip if Ollama isn't reachable
 make check               # everything above plus the web build, mirroring CI
 ```
 
-(Plain npm equivalents: `npm run lint`, `npm test`, `npm run test:integration --workspace=api`, `npm run test:integration:llm --workspace=api`, `npm run smoke`.)
+All of these run inside the containers via `docker compose exec` — run `make up` (or `make dev`) first.
 
 CI (`.github/workflows/ci.yml`) runs `lint` and `unit-tests` in parallel, then `smoke` (migrations + integration tests + the smoke script) against real Postgres/Redis service containers. Ollama is intentionally **not** installed in CI (no compute budget there for local LLM inference) — `test:integration:llm` and the smoke test's LLM-dependent assertions only run locally, where Ollama is expected to already be running.
 
