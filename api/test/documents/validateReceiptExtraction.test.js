@@ -162,4 +162,19 @@ describe('normalizeReceiptExtraction', () => {
     expect(result.isReadable).toBe(true);
     expect(result.total).toBe(100);
   });
+
+  test('normalizes a valid 4-digit card_last_four', () => {
+    const result = normalizeReceiptExtraction({ merchant: 'Coffee', date: null, total: 4.5, line_items: [], card_last_four: '4821' });
+    expect(result.cardLastFour).toBe('4821');
+  });
+
+  test('rejects a card_last_four that is not exactly 4 digits', () => {
+    const result = normalizeReceiptExtraction({ merchant: 'Coffee', date: null, total: 4.5, line_items: [], card_last_four: 'VISA' });
+    expect(result.cardLastFour).toBeNull();
+  });
+
+  test('is null when the receipt is unreadable', () => {
+    const result = normalizeReceiptExtraction({ merchant: null, date: null, total: null, line_items: [], card_last_four: null });
+    expect(result.cardLastFour).toBeNull();
+  });
 });

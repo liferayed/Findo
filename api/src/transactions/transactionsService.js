@@ -58,19 +58,23 @@ function createTransactionsService({ pool }) {
   }
 
   // Used by the receipt-upload flow (F1.6). Type is always 'debit' (a receipt is a purchase —
-  // no credit/debit ambiguity to resolve, unlike F1.5's chat messages), always is_manual:
-  // false, always reconciliation_status: 'confirmed' (no account-ambiguity clarification loop
-  // for this feature, so there's nothing "unconfirmed" about the account resolution). The
-  // caller has already validated the extraction via documents/validateReceiptExtraction.js;
-  // findOwnedAccount is still called here (not just by the caller) so this method is safe to
-  // call on its own, same defensive posture as createTransactionFromChat.
+  // no credit/debit ambiguity to resolve, unlike F1.5's chat messages), always
+  // reconciliation_status: 'confirmed' (no account-ambiguity clarification loop for this
+  // feature, so there's nothing "unconfirmed" about the account resolution). is_manual defaults
+  // to false (the auto-extraction confirm path) but the manual-entry fallback — reached when
+  // the receipt was unreadable and the user types the transaction in by hand — passes
+  // isManual: true so the column reflects what actually happened, rather than every receipt
+  // upload being recorded as machine-parsed. The caller has already validated the extraction
+  // via documents/validateReceiptExtraction.js; findOwnedAccount is still called here (not just
+  // by the caller) so this method is safe to call on its own, same defensive posture as
+  // createTransactionFromChat.
   //
   // Accepts an optional `client` (a checked-out pg client, e.g. from pool.connect()) so the
   // caller can run this INSERT as part of a larger BEGIN/COMMIT transaction alongside its own
   // writes (documents/receiptUploadService.js does this to keep the transaction row and its
   // shared_items/documents/transaction_sources provenance atomic). Defaults to the service's
   // own pool when no client is given, matching every other method here.
-  async function createTransactionFromReceipt(userId, { accountId, transactionDate, amount, merchantRaw }, { client } = {}) {
+  async function createTransactionFromReceipt(userId, { accountId, transactionDate, amount, merchantRaw, isManual = false }, { client } = {}) {
     await findOwnedAccount(userId, accountId, { requireActive: true });
 
     const signedAmount = -amount;
@@ -78,9 +82,9 @@ function createTransactionsService({ pool }) {
 
     const { rows } = await executor.query(
       `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, type, is_manual, reconciliation_status)
-       VALUES ($1, $2, $3, $4, 'debit', false, 'confirmed')
+       VALUES ($1, $2, $3, $4, 'debit', $5, 'confirmed')
        RETURNING ${TRANSACTION_COLUMNS}`,
-      [accountId, transactionDate, signedAmount, merchantRaw]
+      [accountId, transactionDate, signedAmount, merchantRaw, isManual]
     );
     return rows[0];
   }
@@ -98,11 +102,42 @@ function createTransactionsService({ pool }) {
     return rows;
   }
 
+  async function listTransactions(userId, { from, to, accountId } = {}) {
+    const conditions = ['a.user_id = $1'];
+    const values = [userId];
+
+    if (from) {
+      values.push(from);
+      conditions.push(`t.transaction_date >= $${values.length}`);
+    }
+    if (to) {
+      values.push(to);
+      conditions.push(`t.transaction_date <= $${values.length}`);
+    }
+    if (accountId) {
+      values.push(accountId);
+      conditions.push(`t.account_id = $${values.length}`);
+    }
+
+    const { rows } = await pool.query(
+      `SELECT t.id, t.account_id, a.nickname AS account_nickname, t.transaction_date, t.posted_date, t.amount,
+              t.original_amount, t.merchant_raw, t.merchant_normalized, t.category_id, t.type, t.is_manual,
+              t.reconciliation_status, t.notes, t.created_at
+       FROM transactions t
+       JOIN accounts a ON a.id = t.account_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY t.transaction_date DESC, t.created_at DESC`,
+      values
+    );
+    return rows;
+  }
+
   return {
     createTransaction,
     createTransactionFromChat,
     createTransactionFromReceipt,
     listTransactionsForAccount,
+    listTransactions,
     findOwnedAccount,
   };
 }

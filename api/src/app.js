@@ -43,6 +43,7 @@ function createApp({
   resolveCurrentUserId,
   chatTransactionHandler,
   receiptUploadHandler,
+  documentsService,
 }) {
   const app = express();
 
@@ -116,13 +117,86 @@ function createApp({
     }
   });
 
-  app.post('/documents', uploadReceiptFile, async (req, res) => {
+  app.get('/transactions', async (req, res) => {
     try {
       const userId = await resolveCurrentUserId();
-      const result = await receiptUploadHandler.handleUpload(userId, {
+      const transactions = await transactionsService.listTransactions(userId, {
+        from: req.query.from,
+        to: req.query.to,
+        accountId: req.query.account_id,
+      });
+      res.status(200).json(transactions);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.get('/documents', async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      const documents = await documentsService.listDocuments(userId, {
+        from: req.query.from,
+        to: req.query.to,
+        accountId: req.query.account_id,
+      });
+      res.status(200).json(documents);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.post('/documents/extract', uploadReceiptFile, async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      const result = await receiptUploadHandler.handleExtract(userId, {
         file: req.file,
-        accountId: req.body && req.body.account_id,
         channel: req.body && req.body.channel,
+      });
+      res.status(200).json({
+        file_ref: result.fileRef,
+        original_filename: req.file ? req.file.originalname : null,
+        is_readable: result.isReadable,
+        extraction: result.extraction
+          ? {
+              merchant: result.extraction.merchant,
+              transaction_date: result.extraction.transactionDate,
+              total: result.extraction.total,
+              line_items: result.extraction.lineItems,
+            }
+          : null,
+        detected_account_id: result.detectedAccountId,
+      });
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.post('/documents/confirm', async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      const body = req.body || {};
+      const result = await receiptUploadHandler.handleConfirm(userId, {
+        fileRef: body.file_ref,
+        originalFilename: body.original_filename,
+        channel: body.channel,
+        accountId: body.account_id,
+        merchantRaw: body.merchant,
+        transactionDate: body.transaction_date,
+        amount: body.amount,
+        lineItems: body.line_items,
+        isManual: Boolean(body.is_manual),
       });
       res.status(result.statusCode).json({
         document_id: result.documentId,

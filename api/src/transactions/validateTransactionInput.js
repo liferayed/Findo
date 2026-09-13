@@ -41,4 +41,4 @@ function validateTransactionInput(input) {
   return errors;
 }
 
-module.exports = { validateTransactionInput, TRANSACTION_TYPES };
+module.exports = { validateTransactionInput, TRANSACTION_TYPES, isValidCalendarDate };

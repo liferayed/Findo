@@ -3,28 +3,47 @@
 // real-Postgres test (uses a real pg.Pool client and a real BEGIN/COMMIT/ROLLBACK), but
 // deliberately does NOT call the real Ollama vision model — extraction correctness is already
 // covered by receiptUpload.integration.test.js (the LLM-tagged suite); what's under test here
-// is purely the SQL transaction wrapping around the four inserts, which has nothing to do with
-// the vision model. Keeping it out of the LLM-tagged config means it's fast, deterministic, and
-// still runs in the default `test:integration` (CI-safe) bucket.
+// is purely the SQL transaction wrapping around the four inserts inside handleConfirm (the
+// two-phase extract/confirm split's write phase, per Task 2 of the 2026-09-13 UI redesign),
+// which has nothing to do with the vision model. Keeping it out of the LLM-tagged config means
+// it's fast, deterministic, and still runs in the default `test:integration` (CI-safe) bucket.
 const fs = require('node:fs/promises');
+const { randomUUID } = require('node:crypto');
 const { pool } = require('../../src/db');
 const { createAccountsService } = require('../../src/accounts/accountsService');
 const { createTransactionsService } = require('../../src/transactions/transactionsService');
 const { createReceiptUploadHandler } = require('../../src/documents/receiptUploadService');
-const { UPLOAD_DIR } = require('../../src/documents/receiptStorage');
+const { saveReceiptFile, UPLOAD_DIR } = require('../../src/documents/receiptStorage');
 
 const accountsService = createAccountsService({ pool });
 const transactionsService = createTransactionsService({ pool });
 
-// A fast, deterministic stand-in for the real vision model — always resolves with a legible
-// extraction, so every test here reaches the success path's write sequence without depending
-// on Ollama being installed/reachable/fast.
+// A fast, deterministic stand-in for the real vision model — not actually invoked by any test
+// here (handleConfirm never calls extractReceipt; that only happens in handleExtract), but kept
+// so the handler factory has a realistic dependency set.
 async function stubExtractReceipt() {
   return { merchant: 'Stub Coffee', date: '2026-01-15', total: 9.99, line_items: [] };
 }
 
 function fakeReceiptFile() {
   return { buffer: Buffer.from('fake-png-bytes'), mimetype: 'image/png', size: 14, originalname: 'receipt.png' };
+}
+
+function confirmArgs(accountId, overrides = {}) {
+  return {
+    // Needs to match handleConfirm's file_ref shape check (a real saveReceiptFile-produced
+    // filename) even though the file itself doesn't need to exist on disk for these tests —
+    // they never reach code that reads it.
+    fileRef: `api/uploads/receipts/${randomUUID()}.png`,
+    originalFilename: 'receipt.png',
+    channel: 'chat',
+    accountId,
+    merchantRaw: 'Stub Coffee',
+    transactionDate: '2026-01-15',
+    amount: 9.99,
+    lineItems: [],
+    ...overrides,
+  };
 }
 
 async function createTestUser(email) {
@@ -106,9 +125,9 @@ describe('receipt upload write-sequence atomicity (real Postgres, stubbed vision
   });
 
   test('the happy path (no injected failure) really does commit all four rows', async () => {
-    const handler = createReceiptUploadHandler({ pool, transactionsService, extractReceipt: stubExtractReceipt });
+    const handler = createReceiptUploadHandler({ pool, transactionsService, accountsService, extractReceipt: stubExtractReceipt });
 
-    const result = await handler.handleUpload(userId, { file: fakeReceiptFile(), accountId: account.id, channel: 'chat' });
+    const result = await handler.handleConfirm(userId, confirmArgs(account.id));
 
     expect(result.statusCode).toBe(201);
     expect(await countRows('transactions', 'account_id = $1', [account.id])).toBe(1);
@@ -128,11 +147,11 @@ describe('receipt upload write-sequence atomicity (real Postgres, stubbed vision
   // pointing to it.
   test('a failure on the last insert (transaction_sources) rolls back the transaction, shared_items, and documents rows too', async () => {
     const failingPool = poolThatFailsQueryContaining(pool, 'INSERT INTO transaction_sources');
-    const handler = createReceiptUploadHandler({ pool: failingPool, transactionsService, extractReceipt: stubExtractReceipt });
+    const handler = createReceiptUploadHandler({ pool: failingPool, transactionsService, accountsService, extractReceipt: stubExtractReceipt });
 
-    await expect(
-      handler.handleUpload(userId, { file: fakeReceiptFile(), accountId: account.id, channel: 'chat' })
-    ).rejects.toThrow('simulated failure injected for atomicity test');
+    await expect(handler.handleConfirm(userId, confirmArgs(account.id))).rejects.toThrow(
+      'simulated failure injected for atomicity test'
+    );
 
     expect(await countRows('transactions', 'account_id = $1', [account.id])).toBe(0);
     expect(await countRows('shared_items', 'user_id = $1', [userId])).toBe(0);
@@ -146,29 +165,13 @@ describe('receipt upload write-sequence atomicity (real Postgres, stubbed vision
   // pre-fix) is rolled back along with it.
   test('a failure on an earlier insert (shared_items) also rolls back the already-inserted transaction row', async () => {
     const failingPool = poolThatFailsQueryContaining(pool, 'INSERT INTO shared_items');
-    const handler = createReceiptUploadHandler({ pool: failingPool, transactionsService, extractReceipt: stubExtractReceipt });
+    const handler = createReceiptUploadHandler({ pool: failingPool, transactionsService, accountsService, extractReceipt: stubExtractReceipt });
 
-    await expect(
-      handler.handleUpload(userId, { file: fakeReceiptFile(), accountId: account.id, channel: 'chat' })
-    ).rejects.toThrow('simulated failure injected for atomicity test');
+    await expect(handler.handleConfirm(userId, confirmArgs(account.id))).rejects.toThrow(
+      'simulated failure injected for atomicity test'
+    );
 
     expect(await countRows('transactions', 'account_id = $1', [account.id])).toBe(0);
-    expect(await countRows('shared_items', 'user_id = $1', [userId])).toBe(0);
-  });
-
-  // The illegible/unreadable path also writes two rows (shared_items + documents) — proves
-  // that sequence is atomic too, not just the successful-extraction path.
-  test('a failure on documents (illegible path) rolls back the shared_items row too', async () => {
-    async function stubIllegibleExtract() {
-      return { merchant: null, date: null, total: null, line_items: [] };
-    }
-    const failingPool = poolThatFailsQueryContaining(pool, 'INSERT INTO documents');
-    const handler = createReceiptUploadHandler({ pool: failingPool, transactionsService, extractReceipt: stubIllegibleExtract });
-
-    await expect(
-      handler.handleUpload(userId, { file: fakeReceiptFile(), accountId: account.id, channel: 'chat' })
-    ).rejects.toThrow('simulated failure injected for atomicity test');
-
     expect(await countRows('shared_items', 'user_id = $1', [userId])).toBe(0);
   });
 
@@ -177,22 +180,26 @@ describe('receipt upload write-sequence atomicity (real Postgres, stubbed vision
   // so a connection-acquisition failure (pool exhaustion, DB unreachable) would leave the file
   // orphaned on disk with no DB attempt ever made. Uses a real UPLOAD_DIR before/after diff
   // rather than mocking the storage module, so this proves the actual saved file is gone, not
-  // just that a mock was called.
+  // just that a mock was called. Since handleConfirm (not handleExtract) is where this cleanup
+  // logic now lives, the file is saved directly here (standing in for a prior handleExtract
+  // call) rather than by invoking the handler.
   test('a failure acquiring a DB connection still cleans up the already-saved file', async () => {
     const unconnectablePool = {
       connect: async () => {
         throw new Error('simulated pool exhaustion');
       },
     };
-    const handler = createReceiptUploadHandler({ pool: unconnectablePool, transactionsService, extractReceipt: stubExtractReceipt });
+    const handler = createReceiptUploadHandler({ pool: unconnectablePool, transactionsService, accountsService, extractReceipt: stubExtractReceipt });
 
+    const fileRef = await saveReceiptFile(fakeReceiptFile());
     const before = await fs.readdir(UPLOAD_DIR).catch(() => []);
+    expect(before).toContain(fileRef.split('/').pop());
 
     await expect(
-      handler.handleUpload(userId, { file: fakeReceiptFile(), accountId: account.id, channel: 'chat' })
+      handler.handleConfirm(userId, confirmArgs(account.id, { fileRef }))
     ).rejects.toThrow('simulated pool exhaustion');
 
     const after = await fs.readdir(UPLOAD_DIR).catch(() => []);
-    expect(after).toEqual(before);
+    expect(after).not.toContain(fileRef.split('/').pop());
   });
 });

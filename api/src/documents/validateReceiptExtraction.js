@@ -7,6 +7,10 @@ function normalizedString(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
 }
 
+function normalizeCardLastFour(value) {
+  return typeof value === 'string' && /^\d{4}$/.test(value.trim()) ? value.trim() : null;
+}
+
 function normalizeLineItems(rawLineItems) {
   if (!Array.isArray(rawLineItems)) {
     return [];
@@ -57,15 +61,17 @@ function normalizeReceiptExtraction(raw, { now } = {}) {
       transactionDate: null,
       lineItems: [],
       summary: null,
+      cardLastFour: null,
     };
   }
 
   const merchantRaw = normalizedString(source.merchant) || FALLBACK_MERCHANT;
   const transactionDate = parseReceiptDate(source.date, now);
   const lineItems = normalizeLineItems(source.line_items);
+  const cardLastFour = normalizeCardLastFour(source.card_last_four);
   const summary = buildSummary(merchantRaw, total, lineItems);
 
-  return { isReadable: true, total, merchantRaw, transactionDate, lineItems, summary };
+  return { isReadable: true, total, merchantRaw, transactionDate, lineItems, cardLastFour, summary };
 }
 
 module.exports = { normalizeReceiptExtraction };

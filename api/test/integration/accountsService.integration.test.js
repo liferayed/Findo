@@ -113,4 +113,30 @@ describe('accountsService (against real Postgres)', () => {
       await deleteTestUser(otherUserId);
     }
   });
+
+  test('finds the one active account matching a last-four', async () => {
+    await service.createAccount(userId, { type: 'checking', institution_name: 'Chase', nickname: 'Chase Checking', last_four: '4821' });
+    const matches = await service.findActiveAccountsByLastFour(userId, '4821');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].nickname).toBe('Chase Checking');
+  });
+
+  test('returns all active accounts sharing a last-four (caller must collapse 2+ matches to "not detected")', async () => {
+    await service.createAccount(userId, { type: 'checking', institution_name: 'Chase', nickname: 'Chase Checking', last_four: '4821' });
+    await service.createAccount(userId, { type: 'savings', institution_name: 'Chase', nickname: 'Chase Savings', last_four: '4821' });
+    const matches = await service.findActiveAccountsByLastFour(userId, '4821');
+    expect(matches).toHaveLength(2);
+  });
+
+  test('returns empty for a null last-four', async () => {
+    const matches = await service.findActiveAccountsByLastFour(userId, null);
+    expect(matches).toHaveLength(0);
+  });
+
+  test('does not match an inactive account', async () => {
+    const account = await service.createAccount(userId, { type: 'checking', institution_name: 'Chase', nickname: 'Old', last_four: '4821' });
+    await service.updateAccount(userId, account.id, { is_active: false });
+    const matches = await service.findActiveAccountsByLastFour(userId, '4821');
+    expect(matches).toHaveLength(0);
+  });
 });

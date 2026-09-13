@@ -15,16 +15,13 @@ function extensionForMimeType(mimetype) {
 }
 
 /**
- * Validates a receipt upload request (the multer file plus the account_id form field) before
- * any disk I/O or vision-model call happens. Pure and synchronous so a rejected request (bad
- * account, wrong file type, oversized) never gets far enough to write a file or a DB row.
+ * Validates a receipt upload request (just the multer file — account_id is no longer required
+ * at upload time as of the extract/confirm split; that check now lives in handleConfirm) before
+ * any disk I/O or vision-model call happens. Pure and synchronous so a rejected request (wrong
+ * file type, oversized) never gets far enough to write a file.
  */
-function validateReceiptUpload({ file, accountId }) {
+function validateReceiptUpload({ file }) {
   const errors = [];
-
-  if (typeof accountId !== 'string' || accountId.trim() === '') {
-    errors.push('account_id is required');
-  }
 
   if (!file) {
     errors.push('file is required');
