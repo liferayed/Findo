@@ -119,7 +119,7 @@
             file_ref: extractData.file_ref,
             original_filename: extractData.original_filename,
             channel: 'chat',
-            account_id: extractData.detected_account_id || accountId,
+            account_id: accountId || extractData.detected_account_id,
             merchant: extractData.extraction.merchant,
             transaction_date: extractData.extraction.transaction_date,
             amount: extractData.extraction.total,
