@@ -73,7 +73,18 @@ function createAccountsService({ pool }) {
     }
   }
 
-  return { createAccount, listAccounts, updateAccount };
+  async function findActiveAccountsByLastFour(userId, lastFour) {
+    if (!lastFour) {
+      return [];
+    }
+    const { rows } = await pool.query(
+      `SELECT ${ACCOUNT_COLUMNS} FROM accounts WHERE user_id = $1 AND last_four = $2 AND is_active = true`,
+      [userId, lastFour]
+    );
+    return rows;
+  }
+
+  return { createAccount, listAccounts, updateAccount, findActiveAccountsByLastFour };
 }
 
 module.exports = { createAccountsService };

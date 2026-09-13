@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useState } from 'react';
-import { TransactionsPanel } from './TransactionsPanel';
-import { Card } from './components/ui/Card';
-import { Button } from './components/ui/Button';
-import { Badge } from './components/ui/Badge';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
 
 type Account = {
   id: string;
@@ -16,8 +16,8 @@ type Account = {
 const ACCOUNT_TYPES = ['checking', 'savings', 'credit_card', 'brokerage', 'loan'];
 
 const inputClass =
-  'w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 ' +
-  'focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500';
+  'w-full rounded-md border border-stone-300 px-3 py-1.5 text-sm text-stone-900 placeholder:text-stone-400 ' +
+  'focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500';
 
 function accountTypeLabel(type: string): string {
   return type.replace('_', ' ');
@@ -30,7 +30,8 @@ async function parseErrorMessage(res: Response): Promise<string> {
   return `request failed with status ${res.status}`;
 }
 
-export function AccountsPanel() {
+export function AccountsPage() {
+  const navigate = useNavigate();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [nickname, setNickname] = useState('');
   const [type, setType] = useState(ACCOUNT_TYPES[0]);
@@ -38,7 +39,6 @@ export function AccountsPanel() {
   const [lastFour, setLastFour] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [expandedAccountId, setExpandedAccountId] = useState<string | null>(null);
 
   async function loadAccounts() {
     const res = await fetch('/accounts');
@@ -95,14 +95,14 @@ export function AccountsPanel() {
   return (
     <section>
       <div className="mb-4">
-        <h1 className="text-xl font-semibold text-slate-900">Accounts</h1>
-        <p className="mt-1 text-sm text-slate-500">
+        <h1 className="font-serif text-xl font-semibold text-stone-900">Accounts</h1>
+        <p className="mt-1 text-sm text-stone-500">
           Track balances by connecting checking, savings, credit card, brokerage, and loan accounts.
         </p>
       </div>
 
       <Card className="mb-6 p-4 sm:p-5">
-        <h2 className="mb-3 text-sm font-medium text-slate-700">Add an account</h2>
+        <h2 className="mb-3 text-sm font-medium text-stone-700">Add an account</h2>
         <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <input
             value={nickname}
@@ -144,11 +144,11 @@ export function AccountsPanel() {
 
       <Card className="overflow-hidden">
         {accounts.length === 0 ? (
-          <p className="p-5 text-sm text-slate-500">No accounts yet — add one above to get started.</p>
+          <p className="p-5 text-sm text-stone-500">No accounts yet — add one above to get started.</p>
         ) : (
           <div className="overflow-x-auto">
           <table className="w-full min-w-[640px] text-left text-sm">
-            <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+            <thead className="border-b border-stone-200 bg-stone-50 text-xs uppercase tracking-wide text-stone-500">
               <tr>
                 <th className="px-4 py-2 font-medium">Account</th>
                 <th className="px-4 py-2 font-medium">Institution</th>
@@ -159,17 +159,17 @@ export function AccountsPanel() {
             </thead>
             <tbody>
               {accounts.map((account) => (
-                <Fragment key={account.id}>
                   <tr
-                    className={`border-b border-slate-100 last:border-0 ${account.is_active ? '' : 'opacity-60'}`}
+                    key={account.id}
+                    className={`border-b border-stone-100 last:border-0 ${account.is_active ? '' : 'opacity-60'}`}
                   >
-                    <td className="px-4 py-3 font-medium text-slate-900">
+                    <td className="px-4 py-3 font-medium text-stone-900">
                       {account.nickname}
                       {account.last_four && (
-                        <span className="ml-1 font-normal text-slate-400">••{account.last_four}</span>
+                        <span className="ml-1 font-normal text-stone-400">••{account.last_four}</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{account.institution_name}</td>
+                    <td className="px-4 py-3 text-stone-600">{account.institution_name}</td>
                     <td className="px-4 py-3">
                       <Badge tone="accent">{accountTypeLabel(account.type)}</Badge>
                     </td>
@@ -182,11 +182,9 @@ export function AccountsPanel() {
                       <div className="flex justify-end gap-2">
                         <Button
                           variant="secondary"
-                          onClick={() =>
-                            setExpandedAccountId(expandedAccountId === account.id ? null : account.id)
-                          }
+                          onClick={() => navigate(`/transactions?account_id=${account.id}`)}
                         >
-                          {expandedAccountId === account.id ? 'Hide Transactions' : 'View Transactions'}
+                          View Transactions
                         </Button>
                         <Button variant={account.is_active ? 'danger' : 'secondary'} onClick={() => toggleActive(account)}>
                           {account.is_active ? 'Deactivate' : 'Reactivate'}
@@ -194,14 +192,6 @@ export function AccountsPanel() {
                       </div>
                     </td>
                   </tr>
-                  {expandedAccountId === account.id && (
-                    <tr className="border-b border-slate-100 last:border-0 bg-slate-50">
-                      <td colSpan={5} className="px-4 py-4">
-                        <TransactionsPanel accountId={account.id} accountLabel={account.nickname} />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
               ))}
             </tbody>
           </table>

@@ -1,13 +1,18 @@
-import { Header } from './components/Header';
-import { AccountsPanel } from './AccountsPanel';
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { AppShell } from './components/layout/AppShell';
+import { AccountsPage } from './pages/AccountsPage';
+import { TransactionsPage } from './pages/TransactionsPage';
+import { DocumentsPage } from './pages/DocumentsPage';
 
 export function App() {
   return (
-    <div className="min-h-screen bg-slate-50">
-      <Header />
-      <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
-        <AccountsPanel />
-      </main>
-    </div>
+    <AppShell>
+      <Routes>
+        <Route path="/" element={<Navigate to="/accounts" replace />} />
+        <Route path="/accounts" element={<AccountsPage />} />
+        <Route path="/transactions" element={<TransactionsPage />} />
+        <Route path="/documents" element={<DocumentsPage />} />
+      </Routes>
+    </AppShell>
   );
 }

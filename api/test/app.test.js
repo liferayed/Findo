@@ -31,8 +31,11 @@ function buildApp(overrides = {}) {
     // F1.5-specific tests below override this to exercise the chat transaction-capture path.
     chatTransactionHandler: async () => null,
     receiptUploadHandler: {
-      handleUpload: async () => {
-        throw new Error('handleUpload not stubbed');
+      handleExtract: async () => {
+        throw new Error('handleExtract not stubbed');
+      },
+      handleConfirm: async () => {
+        throw new Error('handleConfirm not stubbed');
       },
     },
     ...overrides,
@@ -298,13 +301,140 @@ describe('POST /chat/messages — F1.5 transaction capture wiring', () => {
   });
 });
 
-describe('POST /documents', () => {
-  test('a successful upload returns 201 with document_id, transaction, and message', async () => {
+describe('POST /documents/extract', () => {
+  test('a successful extraction returns 200 with file_ref, extraction, and detected_account_id', async () => {
     let received;
     const app = buildApp({
       receiptUploadHandler: {
-        handleUpload: async (userId, args) => {
+        handleExtract: async (userId, args) => {
           received = { userId, ...args, fileFieldPresent: Boolean(args.file) };
+          return {
+            fileRef: 'api/uploads/receipts/abc123.png',
+            isReadable: true,
+            extraction: {
+              merchant: 'Blue Bottle Coffee',
+              transactionDate: '2026-01-15',
+              total: 15.75,
+              lineItems: [],
+            },
+            detectedAccountId: 'acc-1',
+          };
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post('/documents/extract')
+      .field('channel', 'web_upload')
+      .attach('file', Buffer.from('fake-image-bytes'), { filename: 'receipt.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      file_ref: 'api/uploads/receipts/abc123.png',
+      original_filename: 'receipt.png',
+      is_readable: true,
+      extraction: {
+        merchant: 'Blue Bottle Coffee',
+        transaction_date: '2026-01-15',
+        total: 15.75,
+        line_items: [],
+      },
+      detected_account_id: 'acc-1',
+    });
+    expect(received.userId).toBe(FAKE_USER_ID);
+    expect(received.channel).toBe('web_upload');
+    expect(received.fileFieldPresent).toBe(true);
+  });
+
+  test('an illegible-receipt outcome returns 200 with is_readable false and a null extraction', async () => {
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleExtract: async () => ({
+          fileRef: 'api/uploads/receipts/blurry.png',
+          isReadable: false,
+          extraction: null,
+          detectedAccountId: null,
+        }),
+      },
+    });
+
+    const res = await request(app)
+      .post('/documents/extract')
+      .attach('file', Buffer.from('fake-image-bytes'), { filename: 'blurry.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.is_readable).toBe(false);
+    expect(res.body.extraction).toBeNull();
+  });
+
+  test('propagates a ValidationError from the handler as 400', async () => {
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleExtract: async () => {
+          throw new ValidationError(["Only JPEG/PNG images are supported right now — PDF receipts aren't yet handled."]);
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post('/documents/extract')
+      .attach('file', Buffer.from('%PDF-1.4'), { filename: 'receipt.pdf', contentType: 'application/pdf' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toContain("Only JPEG/PNG images are supported right now — PDF receipts aren't yet handled.");
+  });
+
+  test('a request with no file at all still reaches the handler, which rejects it', async () => {
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleExtract: async (userId, { file }) => {
+          expect(file).toBeUndefined();
+          throw new ValidationError(['file is required']);
+        },
+      },
+    });
+
+    const res = await request(app).post('/documents/extract');
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toContain('file is required');
+  });
+
+  // Guards against buffering an unbounded upload into memory before rejecting it: multer's own
+  // `limits.fileSize` (wired in app.js) must reject an oversized file during the multipart
+  // parse itself, before receiptUploadHandler.handleExtract — and thus
+  // documents/validateReceiptUpload.js — is ever reached, while still producing the exact same
+  // 400 shape/message a request that did reach validateReceiptUpload would get.
+  test('an oversized file is rejected by multer itself, before the extract handler ever runs', async () => {
+    let handlerCalled = false;
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleExtract: async () => {
+          handlerCalled = true;
+          throw new Error('should not be reached — multer should reject this upload first');
+        },
+      },
+    });
+
+    const oversizedBuffer = Buffer.alloc(10 * 1024 * 1024 + 1, 1);
+
+    const res = await request(app)
+      .post('/documents/extract')
+      .attach('file', oversizedBuffer, { filename: 'huge.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toContain('File is too large — receipts must be 10MB or smaller.');
+    expect(handlerCalled).toBe(false);
+  });
+});
+
+describe('POST /documents/confirm', () => {
+  test('a successful confirm returns 201 with document_id, transaction, and message', async () => {
+    let received;
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleConfirm: async (userId, args) => {
+          received = { userId, ...args };
           return {
             statusCode: 201,
             documentId: 'doc-1',
@@ -315,11 +445,16 @@ describe('POST /documents', () => {
       },
     });
 
-    const res = await request(app)
-      .post('/documents')
-      .field('account_id', 'acc-1')
-      .field('channel', 'web_upload')
-      .attach('file', Buffer.from('fake-image-bytes'), { filename: 'receipt.png', contentType: 'image/png' });
+    const res = await request(app).post('/documents/confirm').send({
+      file_ref: 'api/uploads/receipts/abc123.png',
+      original_filename: 'receipt.png',
+      channel: 'web_upload',
+      account_id: 'acc-1',
+      merchant: 'Blue Bottle Coffee',
+      transaction_date: '2026-01-15',
+      amount: 15.75,
+      line_items: [],
+    });
 
     expect(res.status).toBe(201);
     expect(res.body).toEqual({
@@ -328,111 +463,48 @@ describe('POST /documents', () => {
       message: 'Got it — logged $15.75 at Blue Bottle Coffee (debit).',
     });
     expect(received.userId).toBe(FAKE_USER_ID);
+    expect(received.fileRef).toBe('api/uploads/receipts/abc123.png');
+    expect(received.originalFilename).toBe('receipt.png');
     expect(received.accountId).toBe('acc-1');
-    expect(received.channel).toBe('web_upload');
-    expect(received.fileFieldPresent).toBe(true);
-  });
-
-  test('an illegible-receipt outcome returns 200 with a null transaction', async () => {
-    const app = buildApp({
-      receiptUploadHandler: {
-        handleUpload: async () => ({
-          statusCode: 200,
-          documentId: 'doc-2',
-          transaction: null,
-          message: "I couldn't read that receipt clearly — could you reshare a clearer photo, or enter it manually?",
-        }),
-      },
-    });
-
-    const res = await request(app)
-      .post('/documents')
-      .field('account_id', 'acc-1')
-      .attach('file', Buffer.from('fake-image-bytes'), { filename: 'blurry.png', contentType: 'image/png' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.transaction).toBeNull();
-    expect(res.body.document_id).toBe('doc-2');
+    expect(received.merchantRaw).toBe('Blue Bottle Coffee');
+    expect(received.transactionDate).toBe('2026-01-15');
+    expect(received.amount).toBe(15.75);
+    expect(received.lineItems).toEqual([]);
   });
 
   test('propagates a ValidationError from the handler as 400', async () => {
     const app = buildApp({
       receiptUploadHandler: {
-        handleUpload: async () => {
-          throw new ValidationError(["Only JPEG/PNG images are supported right now — PDF receipts aren't yet handled."]);
+        handleConfirm: async () => {
+          throw new ValidationError(['account_id is required']);
         },
       },
     });
 
-    const res = await request(app)
-      .post('/documents')
-      .field('account_id', 'acc-1')
-      .attach('file', Buffer.from('%PDF-1.4'), { filename: 'receipt.pdf', contentType: 'application/pdf' });
+    const res = await request(app).post('/documents/confirm').send({ merchant: 'Blue Bottle Coffee', amount: 15.75 });
 
     expect(res.status).toBe(400);
-    expect(res.body.errors).toContain("Only JPEG/PNG images are supported right now — PDF receipts aren't yet handled.");
+    expect(res.body.errors).toContain('account_id is required');
   });
 
   test('propagates a NotFoundError from the handler as 404 (bad account_id)', async () => {
     const app = buildApp({
       receiptUploadHandler: {
-        handleUpload: async () => {
+        handleConfirm: async () => {
           throw new NotFoundError('account not found');
         },
       },
     });
 
-    const res = await request(app)
-      .post('/documents')
-      .field('account_id', 'does-not-exist')
-      .attach('file', Buffer.from('fake-image-bytes'), { filename: 'receipt.png', contentType: 'image/png' });
+    const res = await request(app).post('/documents/confirm').send({
+      file_ref: 'api/uploads/receipts/abc123.png',
+      account_id: 'does-not-exist',
+      merchant: 'Blue Bottle Coffee',
+      amount: 15.75,
+    });
 
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('account not found');
-  });
-
-  test('a request with no file at all still reaches the handler, which rejects it', async () => {
-    const app = buildApp({
-      receiptUploadHandler: {
-        handleUpload: async (userId, { file }) => {
-          expect(file).toBeUndefined();
-          throw new ValidationError(['file is required']);
-        },
-      },
-    });
-
-    const res = await request(app).post('/documents').field('account_id', 'acc-1');
-
-    expect(res.status).toBe(400);
-    expect(res.body.errors).toContain('file is required');
-  });
-
-  // Guards against buffering an unbounded upload into memory before rejecting it: multer's own
-  // `limits.fileSize` (wired in app.js) must reject an oversized file during the multipart
-  // parse itself, before receiptUploadHandler.handleUpload — and thus
-  // documents/validateReceiptUpload.js — is ever reached, while still producing the exact same
-  // 400 shape/message a request that did reach validateReceiptUpload would get.
-  test('an oversized file is rejected by multer itself, before the upload handler ever runs', async () => {
-    let handlerCalled = false;
-    const app = buildApp({
-      receiptUploadHandler: {
-        handleUpload: async () => {
-          handlerCalled = true;
-          throw new Error('should not be reached — multer should reject this upload first');
-        },
-      },
-    });
-
-    const oversizedBuffer = Buffer.alloc(10 * 1024 * 1024 + 1, 1);
-
-    const res = await request(app)
-      .post('/documents')
-      .field('account_id', 'acc-1')
-      .attach('file', oversizedBuffer, { filename: 'huge.png', contentType: 'image/png' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.errors).toContain('File is too large — receipts must be 10MB or smaller.');
-    expect(handlerCalled).toBe(false);
   });
 });
 

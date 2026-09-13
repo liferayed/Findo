@@ -33,4 +33,18 @@ describe('extractReceipt request contract', () => {
     expect(RESPONSE_SCHEMA.properties.total.type).not.toEqual(expect.arrayContaining(['string']));
     expect(RESPONSE_SCHEMA.properties.line_items.items.properties.amount.type).toBe('number');
   });
+
+  test('includes card_last_four in the response schema', async () => {
+    const fetchMock = jest.fn(async () => {
+      return { ok: true, json: async () => ({ response: '{"merchant": "Coffee", "date": null, "total": 4.5, "line_items": [], "card_last_four": "4821"}' }) };
+    });
+    global.fetch = fetchMock;
+
+    await extractReceipt('base64data');
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.format).toEqual(RESPONSE_SCHEMA);
+    expect(RESPONSE_SCHEMA.properties.card_last_four).toEqual({ type: ['string', 'null'] });
+    expect(RESPONSE_SCHEMA.required).toContain('card_last_four');
+  });
 });
