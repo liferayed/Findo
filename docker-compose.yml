@@ -17,5 +17,47 @@ services:
     ports:
       - "6379:6379"
 
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      DATABASE_URL: postgres://findo:findo@postgres:5432/findo
+      REDIS_URL: redis://redis:6379
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: llama3.2:3b
+      OLLAMA_VISION_MODEL: qwen2.5vl:3b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/app
+      - api-node-modules:/app/node_modules
+    working_dir: /app/api
+    command: npm run dev
+    depends_on:
+      - postgres
+      - redis
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile.dev
+    ports:
+      - "5173:5173"
+    environment:
+      API_PROXY_TARGET: http://api:3000
+    volumes:
+      - .:/app
+      - web-node-modules:/app/node_modules
+    working_dir: /app/web
+    command: npm run dev
+    depends_on:
+      - api
+
 volumes:
   findo-postgres-data:
+  api-node-modules:
+  web-node-modules:
