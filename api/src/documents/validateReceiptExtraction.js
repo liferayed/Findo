@@ -1,13 +1,10 @@
 const { parseReceiptDate } = require('./parseReceiptDate');
+const { coerceToPositiveNumber } = require('../llm/coerceToPositiveNumber');
 
 const FALLBACK_MERCHANT = 'Receipt';
 
 function normalizedString(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
-}
-
-function isValidPositiveNumber(value) {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
 function normalizeLineItems(rawLineItems) {
@@ -18,7 +15,7 @@ function normalizeLineItems(rawLineItems) {
     .filter((item) => item && typeof item === 'object')
     .map((item) => ({
       description: normalizedString(item.description) || 'Item',
-      amount: typeof item.amount === 'number' && Number.isFinite(item.amount) ? item.amount : null,
+      amount: coerceToPositiveNumber(item.amount),
     }))
     .filter((item) => item.amount !== null);
 }
@@ -49,7 +46,7 @@ function buildSummary(merchantRaw, total, lineItems) {
 function normalizeReceiptExtraction(raw, { now } = {}) {
   const source = raw && typeof raw === 'object' ? raw : {};
 
-  const total = isValidPositiveNumber(source.total) ? source.total : null;
+  const total = coerceToPositiveNumber(source.total);
   const isReadable = total !== null;
 
   if (!isReadable) {

@@ -65,6 +65,45 @@ describe('normalizeReceiptExtraction', () => {
     expect(normalizeReceiptExtraction({ total: Infinity }).isReadable).toBe(false);
   });
 
+  // Real-world regression: the model does not always respect the "number" instruction in the
+  // prompt schema. Observed on a real photographed receipt (a Starbucks receipt with a
+  // Subtotal/Tax/Gratuity/Total breakdown) — the model returned `"total": "11.29"` as a JSON
+  // string instead of a JSON number, which the original strict `typeof === 'number'` check
+  // rejected outright, wrongly treating a perfectly legible receipt as unreadable.
+  test('a total returned as a numeric string (a real model quirk, not just a hypothetical) is still treated as readable', () => {
+    const result = normalizeReceiptExtraction({ merchant: 'Starbucks', total: '11.29', line_items: [] }, { now: NOW });
+    expect(result.isReadable).toBe(true);
+    expect(result.total).toBe(11.29);
+  });
+
+  test('line item amounts returned as numeric strings are also coerced rather than dropped', () => {
+    const result = normalizeReceiptExtraction(
+      {
+        merchant: 'Starbucks',
+        total: 11.29,
+        line_items: [
+          { description: 'Gr Latte', amount: '4.95' },
+          { description: 'Cheese Danish', amount: '3.45' },
+        ],
+      },
+      { now: NOW }
+    );
+    expect(result.lineItems).toEqual([
+      { description: 'Gr Latte', amount: 4.95 },
+      { description: 'Cheese Danish', amount: 3.45 },
+    ]);
+  });
+
+  test('a currency-formatted total string ($ prefix, thousands comma) is still coerced correctly', () => {
+    expect(normalizeReceiptExtraction({ total: '$11.29' }).total).toBe(11.29);
+    expect(normalizeReceiptExtraction({ total: '1,234.56' }).total).toBe(1234.56);
+  });
+
+  test('an empty or whitespace-only total string is still treated as unreadable', () => {
+    expect(normalizeReceiptExtraction({ total: '' }).isReadable).toBe(false);
+    expect(normalizeReceiptExtraction({ total: '   ' }).isReadable).toBe(false);
+  });
+
   test('a null merchant falls back to the literal string "Receipt"', () => {
     const result = normalizeReceiptExtraction({ merchant: null, total: 10, line_items: [] }, { now: NOW });
     expect(result.merchantRaw).toBe('Receipt');

@@ -1,3 +1,5 @@
+const { coerceToPositiveNumber } = require('../llm/coerceToPositiveNumber');
+
 const VALID_TYPES = new Set(['debit', 'credit']);
 
 function normalizedString(value) {
@@ -18,13 +20,15 @@ function normalizeExtraction(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
 
   const isTransaction = source.is_transaction === true;
-  const amount = typeof source.amount === 'number' && Number.isFinite(source.amount) ? source.amount : null;
+  const amount = coerceToPositiveNumber(source.amount);
   const type = VALID_TYPES.has(source.type) ? source.type : null;
   const merchant = normalizedString(source.merchant);
   const dateHint = normalizedString(source.date_hint);
   const accountHint = normalizedString(source.account_hint);
 
-  const hasUsableAmount = amount !== null && amount > 0;
+  // coerceToPositiveNumber's own contract already guarantees `amount` is either null or a
+  // genuinely positive finite number — no need to re-check `> 0` here.
+  const hasUsableAmount = amount !== null;
   const isActionable = isTransaction && hasUsableAmount && type !== null;
 
   return {

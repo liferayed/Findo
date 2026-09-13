@@ -1,4 +1,5 @@
 const { config } = require('../config');
+const { parseModelJson } = require('./parseModelJson');
 
 // Vision extraction is slower than F1.5's text extraction — observed ~4.3s warm on the
 // commander's spike machine, cold start can be much longer (~14s observed once). 30s gives
@@ -22,23 +23,33 @@ Rules:
 - date: the transaction date shown on the receipt, if legible.
 - line_items: each purchased item and its price, if legible. Empty array if not legible or not itemized.`;
 
-function parseModelJson(responseText) {
-  try {
-    return JSON.parse(responseText);
-  } catch (err) {
-    // Defensive fallback: the model is asked for pure JSON via format:"json", but strip a
-    // stray markdown code fence before giving up, rather than crashing the caller.
-    const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(responseText || '');
-    if (fenced) {
-      try {
-        return JSON.parse(fenced[1]);
-      } catch {
-        // fall through to throw below
-      }
-    }
-    throw new Error(`ollama vision response was not valid JSON: ${err.message}`);
-  }
-}
+// Passed as `format` instead of the string "json" — a real JSON Schema, so Ollama constrains
+// generation to conform to it (grammar-constrained decoding), not just a prompt instruction the
+// model can ignore. This is what actually fixes the real bug that prompted it: a real
+// photographed receipt made this model return `"total": "11.29"` as a JSON string under plain
+// format:"json" mode; under this schema, the same image reliably returns a real JSON number.
+// The defensive coercion in documents/validateReceiptExtraction.js (coerceToPositiveNumber)
+// stays in place as a second line of defense, not a replacement for this fix.
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    merchant: { type: ['string', 'null'] },
+    date: { type: ['string', 'null'] },
+    total: { type: ['number', 'null'] },
+    line_items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          description: { type: 'string' },
+          amount: { type: 'number' },
+        },
+        required: ['description', 'amount'],
+      },
+    },
+  },
+  required: ['merchant', 'date', 'total', 'line_items'],
+};
 
 /**
  * Calls the local Ollama vision model to extract structured receipt fields from an image.
@@ -66,7 +77,7 @@ async function extractReceipt(imageBase64, { timeoutMs = EXTRACTION_TIMEOUT_MS }
         model: config.ollamaVisionModel,
         prompt: PROMPT_TEMPLATE,
         images: [imageBase64],
-        format: 'json',
+        format: RESPONSE_SCHEMA,
         stream: false,
         // temperature: 0 — structured field extraction wants determinism, not creative
         // sampling. Verified (commander spike) this eliminates the run-to-run variance
@@ -80,10 +91,10 @@ async function extractReceipt(imageBase64, { timeoutMs = EXTRACTION_TIMEOUT_MS }
     }
 
     const body = await res.json();
-    return parseModelJson(body.response);
+    return parseModelJson(body.response, 'ollama vision');
   })();
 
   return Promise.race([call, timeout]);
 }
 
-module.exports = { extractReceipt, PROMPT_TEMPLATE, EXTRACTION_TIMEOUT_MS };
+module.exports = { extractReceipt, PROMPT_TEMPLATE, RESPONSE_SCHEMA, EXTRACTION_TIMEOUT_MS };

@@ -1,4 +1,5 @@
 const { config } = require('../config');
+const { parseModelJson } = require('./parseModelJson');
 
 // Cold-start model load can take several seconds; warm calls are ~1-2s per the brief's
 // spike. 20s gives real headroom without letting a stuck call hang the HTTP request.
@@ -20,26 +21,30 @@ Rules:
 
 Message: "{{MESSAGE}}"`;
 
+// Passed as `format` instead of the string "json" — this is a real JSON Schema, so Ollama
+// constrains generation to conform to it (grammar-constrained decoding), not just a prompt
+// instruction the model can ignore. Verified against the real model: this is what actually
+// stops `amount` coming back as a string instead of a number — the defensive coercion in
+// chat/validateExtraction.js (coerceToPositiveNumber) stays in place as a second line of
+// defense, not a replacement for this. Do not change the prompt's own "Schema:" text when
+// touching this — removing it from the prompt (leaving only this `format` schema) was tested
+// and caused the model to misclassify an unambiguous transaction message; the prompt's
+// explanation and this structural constraint are both load-bearing, independently.
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    is_transaction: { type: 'boolean' },
+    amount: { type: ['number', 'null'] },
+    merchant: { type: ['string', 'null'] },
+    type: { type: ['string', 'null'] },
+    date_hint: { type: ['string', 'null'] },
+    account_hint: { type: ['string', 'null'] },
+  },
+  required: ['is_transaction', 'amount', 'merchant', 'type', 'date_hint', 'account_hint'],
+};
+
 function buildPrompt(message) {
   return PROMPT_TEMPLATE.replace('{{MESSAGE}}', message);
-}
-
-function parseModelJson(responseText) {
-  try {
-    return JSON.parse(responseText);
-  } catch (err) {
-    // Defensive fallback: the model is asked for pure JSON via format:"json", but strip a
-    // stray markdown code fence before giving up, rather than crashing the caller.
-    const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(responseText || '');
-    if (fenced) {
-      try {
-        return JSON.parse(fenced[1]);
-      } catch {
-        // fall through to throw below
-      }
-    }
-    throw new Error(`ollama response was not valid JSON: ${err.message}`);
-  }
 }
 
 /**
@@ -64,7 +69,7 @@ async function extractTransaction(message, { timeoutMs = EXTRACTION_TIMEOUT_MS }
       body: JSON.stringify({
         model: config.ollamaModel,
         prompt: buildPrompt(message),
-        format: 'json',
+        format: RESPONSE_SCHEMA,
         stream: false,
         // temperature: 0 — structured field extraction wants determinism, not creative
         // sampling (added alongside F1.6's vision client for the same reason).
@@ -77,10 +82,10 @@ async function extractTransaction(message, { timeoutMs = EXTRACTION_TIMEOUT_MS }
     }
 
     const body = await res.json();
-    return parseModelJson(body.response);
+    return parseModelJson(body.response, 'ollama');
   })();
 
   return Promise.race([call, timeout]);
 }
 
-module.exports = { extractTransaction, buildPrompt, PROMPT_TEMPLATE, EXTRACTION_TIMEOUT_MS };
+module.exports = { extractTransaction, buildPrompt, PROMPT_TEMPLATE, RESPONSE_SCHEMA, EXTRACTION_TIMEOUT_MS };
