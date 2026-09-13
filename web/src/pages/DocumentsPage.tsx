@@ -484,7 +484,7 @@ function ConfirmForm({
         <Button variant="secondary" onClick={onClose}>
           Cancel
         </Button>
-        <Button onClick={handleSubmit} disabled={saving || !accountId || !merchant || !amount}>
+        <Button onClick={handleSubmit} disabled={saving || !accountId || !merchant || !amount || !transactionDate}>
           {saving ? 'Saving…' : itemsEditable ? 'Save Transaction' : 'Confirm & Save'}
         </Button>
       </div>

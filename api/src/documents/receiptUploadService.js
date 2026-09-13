@@ -1,6 +1,7 @@
 const { normalizeReceiptExtraction } = require('./validateReceiptExtraction');
 const { validateReceiptUpload } = require('./validateReceiptUpload');
 const { saveReceiptFile, deleteReceiptFileQuietly } = require('./receiptStorage');
+const { isValidCalendarDate } = require('../transactions/validateTransactionInput');
 const { ValidationError } = require('../errors');
 
 // Matches exactly what saveReceiptFile (receiptStorage.js) produces: api/uploads/receipts/
@@ -118,6 +119,11 @@ function createReceiptUploadHandler({ pool, transactionsService, accountsService
     }
     if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
       errors.push('amount must be a positive number');
+    }
+    if (typeof transactionDate !== 'string' || transactionDate.trim() === '') {
+      errors.push('transaction date is required');
+    } else if (!isValidCalendarDate(transactionDate)) {
+      errors.push('transaction date is invalid');
     }
     if (errors.length > 0) {
       // Validation failures are retryable — the user just needs to fix their input and submit

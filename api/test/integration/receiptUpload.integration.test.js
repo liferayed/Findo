@@ -304,6 +304,53 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
     expect(retryResult.statusCode).toBe(201);
   });
 
+  // A missing/malformed transaction_date is a validation failure caught before pool.connect() —
+  // just like the missing merchant/amount checks above — so it must be retryable: the saved
+  // file must survive, not be deleted. Before this fix, an empty transactionDate skipped
+  // validation entirely and reached Postgres's `date NOT NULL` column inside the BEGIN block,
+  // landing in the DB-failure catch branch that (correctly, for genuine DB failures) deletes the
+  // file — reproducing the "file deleted but UI invites a retry with the same file_ref" bug via
+  // a different trigger.
+  test('handleConfirm rejects a missing transaction date with a ValidationError and leaves the saved receipt file on disk, so a retry with the same file_ref can succeed', async () => {
+    const file = loadFixture('clear-coffee-receipt.png');
+    const extractResult = await receiptUploadHandler.handleExtract(userId, { file, channel: 'chat' });
+
+    const savedFilePath = path.join(UPLOAD_DIR, path.basename(extractResult.fileRef));
+    await expect(fsPromises.access(savedFilePath)).resolves.toBeUndefined(); // file exists after extract
+
+    await expect(
+      receiptUploadHandler.handleConfirm(userId, {
+        fileRef: extractResult.fileRef,
+        originalFilename: file.originalname,
+        channel: 'chat',
+        accountId: account.id,
+        merchantRaw: extractResult.extraction.merchant,
+        transactionDate: '',
+        amount: extractResult.extraction.total,
+        lineItems: extractResult.extraction.lineItems,
+      })
+    ).rejects.toBeInstanceOf(ValidationError);
+
+    await expect(fsPromises.access(savedFilePath)).resolves.toBeUndefined(); // file still exists — retry is possible
+
+    const items = await sharedItemsForUser(userId);
+    expect(items).toHaveLength(0);
+
+    // And the retry itself actually works with the same file_ref, proving this isn't just an
+    // unused file sitting on disk.
+    const retryResult = await receiptUploadHandler.handleConfirm(userId, {
+      fileRef: extractResult.fileRef,
+      originalFilename: file.originalname,
+      channel: 'chat',
+      accountId: account.id,
+      merchantRaw: extractResult.extraction.merchant,
+      transactionDate: extractResult.extraction.transactionDate,
+      amount: extractResult.extraction.total,
+      lineItems: extractResult.extraction.lineItems,
+    });
+    expect(retryResult.statusCode).toBe(201);
+  });
+
   test("another user's account_id (not owned by this user) is rejected by handleConfirm the same way as nonexistent", async () => {
     const otherUserId = await createTestUser(`f16-other-${Date.now()}@findo.test`);
     try {
