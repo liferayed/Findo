@@ -3,6 +3,12 @@ const { validateReceiptUpload } = require('./validateReceiptUpload');
 const { saveReceiptFile, deleteReceiptFileQuietly } = require('./receiptStorage');
 const { ValidationError } = require('../errors');
 
+// Matches exactly what saveReceiptFile (receiptStorage.js) produces: api/uploads/receipts/
+// followed by a randomUUID() and an extension from ALLOWED_MIME_TYPES (validateReceiptUpload.js).
+// Rejecting anything else here means a client can't smuggle an arbitrary path through file_ref —
+// it's persisted verbatim as provenance, so its shape is checked alongside the other fields.
+const FILE_REF_PATTERN = /^api\/uploads\/receipts\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png)$/;
+
 function buildConfirmationReply(merchantRaw, amount) {
   return `Got it — logged $${amount.toFixed(2)} at ${merchantRaw} (debit).`;
 }
@@ -93,29 +99,44 @@ function createReceiptUploadHandler({ pool, transactionsService, accountsService
     };
   }
 
-  async function handleConfirm(userId, { fileRef, originalFilename, channel, accountId, merchantRaw, transactionDate, amount, lineItems }) {
+  // `isManual` distinguishes the two callers of this same confirm path: the auto-extraction
+  // confirm flow (default, false — the vision model successfully parsed the receipt) and the
+  // manual-entry fallback (true — reached specifically because the receipt was unreadable, so
+  // the human is typing in what the model couldn't extract). It's used only to record what
+  // actually happened to the underlying file/extraction (parse_status, is_manual on the
+  // transaction) — it does not change any validation or write-path behavior otherwise.
+  async function handleConfirm(userId, { fileRef, originalFilename, channel, accountId, merchantRaw, transactionDate, amount, lineItems, isManual = false }) {
+    const errors = [];
+    if (typeof fileRef !== 'string' || !FILE_REF_PATTERN.test(fileRef)) {
+      errors.push('file_ref is invalid');
+    }
+    if (typeof accountId !== 'string' || accountId.trim() === '') {
+      errors.push('account_id is required');
+    }
+    if (typeof merchantRaw !== 'string' || merchantRaw.trim() === '') {
+      errors.push('merchant is required');
+    }
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
+      errors.push('amount must be a positive number');
+    }
+    if (errors.length > 0) {
+      // Validation failures are retryable — the user just needs to fix their input and submit
+      // again with the same file_ref, so the saved file must NOT be deleted here.
+      throw new ValidationError(errors);
+    }
+
+    // A bad/inactive/other-user account_id is also retryable (the user picks a different
+    // account and resubmits with the same file_ref) — same reasoning as above, so this must
+    // stay outside the try/catch that cleans up the file below.
+    await transactionsService.findOwnedAccount(userId, accountId, { requireActive: true });
+
+    const channelValue = normalizeChannel(channel);
+    const parseStatus = isManual ? 'failed' : 'parsed';
+    const summary = lineItems && lineItems.length > 0
+      ? `${merchantRaw} — $${amount.toFixed(2)} (${lineItems.length} item${lineItems.length === 1 ? '' : 's'})`
+      : `${merchantRaw} — $${amount.toFixed(2)}`;
+
     try {
-      const errors = [];
-      if (typeof accountId !== 'string' || accountId.trim() === '') {
-        errors.push('account_id is required');
-      }
-      if (typeof merchantRaw !== 'string' || merchantRaw.trim() === '') {
-        errors.push('merchant is required');
-      }
-      if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
-        errors.push('amount must be a positive number');
-      }
-      if (errors.length > 0) {
-        throw new ValidationError(errors);
-      }
-
-      await transactionsService.findOwnedAccount(userId, accountId, { requireActive: true });
-
-      const channelValue = normalizeChannel(channel);
-      const summary = lineItems && lineItems.length > 0
-        ? `${merchantRaw} — $${amount.toFixed(2)} (${lineItems.length} item${lineItems.length === 1 ? '' : 's'})`
-        : `${merchantRaw} — $${amount.toFixed(2)}`;
-
       const client = await pool.connect();
 
       try {
@@ -123,11 +144,11 @@ function createReceiptUploadHandler({ pool, transactionsService, accountsService
 
         const transaction = await transactionsService.createTransactionFromReceipt(
           userId,
-          { accountId, transactionDate, amount, merchantRaw },
+          { accountId, transactionDate, amount, merchantRaw, isManual },
           { client }
         );
 
-        const sharedItem = await insertSharedItem(client, userId, channelValue, fileRef, originalFilename, 'parsed', summary);
+        const sharedItem = await insertSharedItem(client, userId, channelValue, fileRef, originalFilename, parseStatus, summary);
         const document = await insertDocument(client, sharedItem.id);
         await insertTransactionSource(client, transaction.id, sharedItem.id);
 
@@ -140,6 +161,9 @@ function createReceiptUploadHandler({ pool, transactionsService, accountsService
         client.release();
       }
     } catch (err) {
+      // Only DB/connection/transaction failures land here (pool.connect() itself, or anything
+      // inside the BEGIN/COMMIT block) — genuinely non-retryable with the same file_ref, so the
+      // saved file is cleaned up.
       await deleteReceiptFileQuietly(fileRef);
       throw err;
     }

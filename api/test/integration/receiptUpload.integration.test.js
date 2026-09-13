@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const fsPromises = require('node:fs/promises');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { pool } = require('../../src/db');
 const { createAccountsService } = require('../../src/accounts/accountsService');
 const { createTransactionsService } = require('../../src/transactions/transactionsService');
@@ -122,7 +123,7 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
 
   test('handleConfirm on manually-entered fields (no vision extraction involved) still creates a transaction', async () => {
     const result = await receiptUploadHandler.handleConfirm(userId, {
-      fileRef: 'api/uploads/receipts/does-not-need-to-exist-for-this-test.png',
+      fileRef: `api/uploads/receipts/${randomUUID()}.png`,
       originalFilename: 'blurry.png',
       channel: 'web_upload',
       accountId: account.id,
@@ -133,6 +134,36 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
     });
     expect(result.statusCode).toBe(201);
     expect(result.transaction.merchant_raw).toBe('Manually Entered Store');
+  });
+
+  // Regression test for the manual-entry provenance fix: the manual-entry fallback is reached
+  // specifically because the receipt was unreadable, so a human types the transaction in by
+  // hand. That must NOT be recorded as if a model successfully parsed the receipt —
+  // isManual: true should flow through to both the transaction's is_manual column and the
+  // shared_items row's parse_status (which should say 'failed', since the underlying
+  // extraction genuinely did fail; the manual entry doesn't change that fact about the file).
+  test('a manual-entry confirm (isManual: true) records is_manual: true on the transaction and parse_status: failed on the shared_items row', async () => {
+    const result = await receiptUploadHandler.handleConfirm(userId, {
+      fileRef: `api/uploads/receipts/${randomUUID()}.png`,
+      originalFilename: 'blurry.png',
+      channel: 'web_upload',
+      accountId: account.id,
+      merchantRaw: 'Manually Entered Store',
+      transactionDate: '2026-09-01',
+      amount: 12.5,
+      lineItems: [],
+      isManual: true,
+    });
+
+    expect(result.statusCode).toBe(201);
+    expect(result.transaction.is_manual).toBe(true);
+
+    const items = await sharedItemsForUser(userId);
+    expect(items).toHaveLength(1);
+    expect(items[0].parse_status).toBe('failed');
+
+    const sources = await transactionSourcesFor(result.transaction.id);
+    expect(sources).toHaveLength(1);
   });
 
   // Proves the "gate on `total`, not a self-reported legibility flag" rule matters in
@@ -232,7 +263,11 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
     expect(items).toHaveLength(0);
   });
 
-  test('handleConfirm cleans up the saved receipt file from disk when the account_id is invalid', async () => {
+  // An invalid account_id is retryable — the user just needs to pick a different account and
+  // resubmit with the same file_ref — so the saved file must survive this failure, not be
+  // deleted. (Previously this test asserted the opposite, which meant the UI's "Your entries
+  // are kept — try again" retry prompt was actually lying: the file was already gone.)
+  test('handleConfirm leaves the saved receipt file on disk when the account_id is invalid, so a retry with the same file_ref can succeed', async () => {
     const file = loadFixture('clear-coffee-receipt.png');
     const extractResult = await receiptUploadHandler.handleExtract(userId, { file, channel: 'chat' });
 
@@ -252,7 +287,21 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
       })
     ).rejects.toBeInstanceOf(NotFoundError);
 
-    await expect(fsPromises.access(savedFilePath)).rejects.toThrow(); // orphaned file cleaned up
+    await expect(fsPromises.access(savedFilePath)).resolves.toBeUndefined(); // file still exists — retry is possible
+
+    // And the retry itself actually works with the same file_ref, proving this isn't just an
+    // unused file sitting on disk.
+    const retryResult = await receiptUploadHandler.handleConfirm(userId, {
+      fileRef: extractResult.fileRef,
+      originalFilename: file.originalname,
+      channel: 'chat',
+      accountId: account.id,
+      merchantRaw: extractResult.extraction.merchant,
+      transactionDate: extractResult.extraction.transactionDate,
+      amount: extractResult.extraction.total,
+      lineItems: extractResult.extraction.lineItems,
+    });
+    expect(retryResult.statusCode).toBe(201);
   });
 
   test("another user's account_id (not owned by this user) is rejected by handleConfirm the same way as nonexistent", async () => {

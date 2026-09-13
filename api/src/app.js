@@ -196,6 +196,7 @@ function createApp({
         transactionDate: body.transaction_date,
         amount: body.amount,
         lineItems: body.line_items,
+        isManual: Boolean(body.is_manual),
       });
       res.status(result.statusCode).json({
         document_id: result.documentId,

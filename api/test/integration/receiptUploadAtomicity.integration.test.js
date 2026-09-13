@@ -8,6 +8,7 @@
 // which has nothing to do with the vision model. Keeping it out of the LLM-tagged config means
 // it's fast, deterministic, and still runs in the default `test:integration` (CI-safe) bucket.
 const fs = require('node:fs/promises');
+const { randomUUID } = require('node:crypto');
 const { pool } = require('../../src/db');
 const { createAccountsService } = require('../../src/accounts/accountsService');
 const { createTransactionsService } = require('../../src/transactions/transactionsService');
@@ -30,7 +31,10 @@ function fakeReceiptFile() {
 
 function confirmArgs(accountId, overrides = {}) {
   return {
-    fileRef: 'api/uploads/receipts/does-not-need-to-exist-for-this-test.png',
+    // Needs to match handleConfirm's file_ref shape check (a real saveReceiptFile-produced
+    // filename) even though the file itself doesn't need to exist on disk for these tests —
+    // they never reach code that reads it.
+    fileRef: `api/uploads/receipts/${randomUUID()}.png`,
     originalFilename: 'receipt.png',
     channel: 'chat',
     accountId,
