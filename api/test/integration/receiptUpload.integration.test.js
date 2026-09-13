@@ -1,10 +1,12 @@
 const fs = require('node:fs');
+const fsPromises = require('node:fs/promises');
 const path = require('node:path');
 const { pool } = require('../../src/db');
 const { createAccountsService } = require('../../src/accounts/accountsService');
 const { createTransactionsService } = require('../../src/transactions/transactionsService');
 const { createReceiptUploadHandler } = require('../../src/documents/receiptUploadService');
 const { extractReceipt } = require('../../src/llm/ollamaVisionClient');
+const { UPLOAD_DIR } = require('../../src/documents/receiptStorage');
 const { ValidationError, NotFoundError } = require('../../src/errors');
 
 const FIXTURES_DIR = path.join(__dirname, '..', 'fixtures', 'receipts');
@@ -228,6 +230,29 @@ describe('receipt upload & parsing (against real Postgres AND real Ollama vision
 
     const items = await sharedItemsForUser(userId);
     expect(items).toHaveLength(0);
+  });
+
+  test('handleConfirm cleans up the saved receipt file from disk when the account_id is invalid', async () => {
+    const file = loadFixture('clear-coffee-receipt.png');
+    const extractResult = await receiptUploadHandler.handleExtract(userId, { file, channel: 'chat' });
+
+    const savedFilePath = path.join(UPLOAD_DIR, path.basename(extractResult.fileRef));
+    await expect(fsPromises.access(savedFilePath)).resolves.toBeUndefined(); // file exists after extract
+
+    await expect(
+      receiptUploadHandler.handleConfirm(userId, {
+        fileRef: extractResult.fileRef,
+        originalFilename: file.originalname,
+        channel: 'chat',
+        accountId: '00000000-0000-0000-0000-000000000000',
+        merchantRaw: extractResult.extraction.merchant,
+        transactionDate: extractResult.extraction.transactionDate,
+        amount: extractResult.extraction.total,
+        lineItems: extractResult.extraction.lineItems,
+      })
+    ).rejects.toBeInstanceOf(NotFoundError);
+
+    await expect(fsPromises.access(savedFilePath)).rejects.toThrow(); // orphaned file cleaned up
   });
 
   test("another user's account_id (not owned by this user) is rejected by handleConfirm the same way as nonexistent", async () => {

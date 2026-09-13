@@ -94,56 +94,54 @@ function createReceiptUploadHandler({ pool, transactionsService, accountsService
   }
 
   async function handleConfirm(userId, { fileRef, originalFilename, channel, accountId, merchantRaw, transactionDate, amount, lineItems }) {
-    const errors = [];
-    if (typeof accountId !== 'string' || accountId.trim() === '') {
-      errors.push('account_id is required');
-    }
-    if (typeof merchantRaw !== 'string' || merchantRaw.trim() === '') {
-      errors.push('merchant is required');
-    }
-    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
-      errors.push('amount must be a positive number');
-    }
-    if (errors.length > 0) {
-      throw new ValidationError(errors);
-    }
-
-    await transactionsService.findOwnedAccount(userId, accountId, { requireActive: true });
-
-    const channelValue = normalizeChannel(channel);
-    const summary = lineItems && lineItems.length > 0
-      ? `${merchantRaw} — $${amount.toFixed(2)} (${lineItems.length} item${lineItems.length === 1 ? '' : 's'})`
-      : `${merchantRaw} — $${amount.toFixed(2)}`;
-
-    let client;
     try {
-      client = await pool.connect();
+      const errors = [];
+      if (typeof accountId !== 'string' || accountId.trim() === '') {
+        errors.push('account_id is required');
+      }
+      if (typeof merchantRaw !== 'string' || merchantRaw.trim() === '') {
+        errors.push('merchant is required');
+      }
+      if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
+        errors.push('amount must be a positive number');
+      }
+      if (errors.length > 0) {
+        throw new ValidationError(errors);
+      }
+
+      await transactionsService.findOwnedAccount(userId, accountId, { requireActive: true });
+
+      const channelValue = normalizeChannel(channel);
+      const summary = lineItems && lineItems.length > 0
+        ? `${merchantRaw} — $${amount.toFixed(2)} (${lineItems.length} item${lineItems.length === 1 ? '' : 's'})`
+        : `${merchantRaw} — $${amount.toFixed(2)}`;
+
+      const client = await pool.connect();
+
+      try {
+        await client.query('BEGIN');
+
+        const transaction = await transactionsService.createTransactionFromReceipt(
+          userId,
+          { accountId, transactionDate, amount, merchantRaw },
+          { client }
+        );
+
+        const sharedItem = await insertSharedItem(client, userId, channelValue, fileRef, originalFilename, 'parsed', summary);
+        const document = await insertDocument(client, sharedItem.id);
+        await insertTransactionSource(client, transaction.id, sharedItem.id);
+
+        await client.query('COMMIT');
+        return { statusCode: 201, documentId: document.id, transaction, message: buildConfirmationReply(merchantRaw, amount) };
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
     } catch (err) {
       await deleteReceiptFileQuietly(fileRef);
       throw err;
-    }
-
-    try {
-      await client.query('BEGIN');
-
-      const transaction = await transactionsService.createTransactionFromReceipt(
-        userId,
-        { accountId, transactionDate, amount, merchantRaw },
-        { client }
-      );
-
-      const sharedItem = await insertSharedItem(client, userId, channelValue, fileRef, originalFilename, 'parsed', summary);
-      const document = await insertDocument(client, sharedItem.id);
-      await insertTransactionSource(client, transaction.id, sharedItem.id);
-
-      await client.query('COMMIT');
-      return { statusCode: 201, documentId: document.id, transaction, message: buildConfirmationReply(merchantRaw, amount) };
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      await deleteReceiptFileQuietly(fileRef);
-      throw err;
-    } finally {
-      client.release();
     }
   }
 
