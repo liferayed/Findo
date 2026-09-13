@@ -118,23 +118,39 @@ function createApp({
   });
 
   app.get('/transactions', async (req, res) => {
-    const userId = await resolveCurrentUserId();
-    const transactions = await transactionsService.listTransactions(userId, {
-      from: req.query.from,
-      to: req.query.to,
-      accountId: req.query.account_id,
-    });
-    res.status(200).json(transactions);
+    try {
+      const userId = await resolveCurrentUserId();
+      const transactions = await transactionsService.listTransactions(userId, {
+        from: req.query.from,
+        to: req.query.to,
+        accountId: req.query.account_id,
+      });
+      res.status(200).json(transactions);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
   });
 
   app.get('/documents', async (req, res) => {
-    const userId = await resolveCurrentUserId();
-    const documents = await documentsService.listDocuments(userId, {
-      from: req.query.from,
-      to: req.query.to,
-      accountId: req.query.account_id,
-    });
-    res.status(200).json(documents);
+    try {
+      const userId = await resolveCurrentUserId();
+      const documents = await documentsService.listDocuments(userId, {
+        from: req.query.from,
+        to: req.query.to,
+        accountId: req.query.account_id,
+      });
+      res.status(200).json(documents);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
   });
 
   app.post('/documents/extract', uploadReceiptFile, async (req, res) => {
