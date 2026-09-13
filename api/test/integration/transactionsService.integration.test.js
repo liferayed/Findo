@@ -290,4 +290,41 @@ describe('transactionsService (against real Postgres)', () => {
     expect(results.find((t) => t.merchant_raw === 'Not Mine')).toBeUndefined();
     await deleteTestUser(otherUserId);
   });
+
+  test('listTransactions with another user\'s account_id filter returns empty (cross-tenant isolation)', async () => {
+    // Create a transaction for the current user
+    await service.createTransaction(userId, {
+      account_id: accountId,
+      transaction_date: '2026-09-01',
+      amount: 10,
+      type: 'debit',
+      merchant_raw: 'My Transaction',
+    });
+
+    // Create a second user with their own account and transaction
+    const otherUserId = await createTestUser(`other-${Date.now()}-${Math.random()}@findo.test`);
+    try {
+      const otherAccount = await accountsService.createAccount(otherUserId, {
+        type: 'checking',
+        institution_name: 'Bank of Other',
+        nickname: `Other-${Math.random()}`,
+        last_four: '9999',
+      });
+      await service.createTransaction(otherUserId, {
+        account_id: otherAccount.id,
+        transaction_date: '2026-09-01',
+        amount: 20,
+        type: 'debit',
+        merchant_raw: 'Other User\'s Transaction',
+      });
+
+      // Attempt to list transactions as userId, but filter by otherUser's accountId
+      const results = await service.listTransactions(userId, { accountId: otherAccount.id });
+
+      // Should return empty array — the WHERE clause enforces both user_id and account_id
+      expect(results).toEqual([]);
+    } finally {
+      await deleteTestUser(otherUserId);
+    }
+  });
 });
