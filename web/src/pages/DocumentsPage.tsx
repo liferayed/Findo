@@ -100,12 +100,12 @@ export function DocumentsPage() {
       res = await fetch('/documents/extract', { method: 'POST', body: formData });
     } catch {
       setStage({ name: 'idle' });
-      showToast("Couldn't upload the file — check your connection and try again.");
+      showToast("Couldn't upload the file — check your connection and try again.", 'error');
       return;
     }
     if (!res.ok) {
       setStage({ name: 'idle' });
-      showToast("Couldn't upload the file — check your connection and try again.");
+      showToast("Couldn't upload the file — check your connection and try again.", 'error');
       return;
     }
     const result: ExtractResult = await res.json();
@@ -128,6 +128,7 @@ export function DocumentsPage() {
     transactionDate: string;
     amount: number;
     lineItems: Array<{ description: string; amount: number }>;
+    isManual: boolean;
   }, onError: (message: string) => void) {
     let res: Response;
     try {
@@ -143,6 +144,7 @@ export function DocumentsPage() {
           transaction_date: payload.transactionDate,
           amount: payload.amount,
           line_items: payload.lineItems,
+          is_manual: payload.isManual,
         }),
       });
     } catch {
@@ -320,6 +322,7 @@ type ConfirmFormProps = {
       transactionDate: string;
       amount: number;
       lineItems: Array<{ description: string; amount: number }>;
+      isManual: boolean;
     },
     onError: (message: string) => void,
   ) => void;
@@ -360,6 +363,10 @@ function ConfirmForm({
         transactionDate,
         amount: parseFloat(amount),
         lineItems,
+        // itemsEditable is true only for the manual-entry fallback (reached because the
+        // receipt was unreadable) — the same signal doubles as isManual here so the backend
+        // records parse_status/is_manual accurately instead of hard-coding a successful parse.
+        isManual: itemsEditable,
       },
       (message) => {
         setError(message);
@@ -382,7 +389,14 @@ function ConfirmForm({
         </div>
         <div className="flex-1">
           <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-stone-400">Total</label>
-          <input className={inputClass} value={amount} onChange={(e) => setAmount(e.target.value)} />
+          <input
+            type="number"
+            step="0.01"
+            min="0.01"
+            className={inputClass}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+          />
         </div>
       </div>
       <div className="mb-3">
