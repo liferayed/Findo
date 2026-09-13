@@ -19,6 +19,6 @@ describe('App', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Accounts', { selector: 'main div' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Accounts' })).toBeInTheDocument();
   });
 });
