@@ -11,6 +11,7 @@ const { extractTransaction } = require('./llm/ollamaClient');
 const { extractReceipt } = require('./llm/ollamaVisionClient');
 const { createChatTransactionHandler } = require('./chat/chatTransactionHandler');
 const { createReceiptUploadHandler } = require('./documents/receiptUploadService');
+const { createDocumentsService } = require('./documents/documentsService');
 
 startNoopWorker();
 
@@ -18,6 +19,7 @@ const transactionsService = createTransactionsService({ pool });
 const accountsService = createAccountsService({ pool });
 const chatTransactionHandler = createChatTransactionHandler({ pool, transactionsService, extractTransaction });
 const receiptUploadHandler = createReceiptUploadHandler({ pool, transactionsService, accountsService, extractReceipt });
+const documentsService = createDocumentsService({ pool });
 
 const app = createApp({
   checkHealth: () => checkHealth({ pingPostgres, pingRedis, runNoopJob }),
@@ -26,6 +28,7 @@ const app = createApp({
   resolveCurrentUserId: () => getCurrentUserId(pool),
   chatTransactionHandler: chatTransactionHandler.handleMessage,
   receiptUploadHandler,
+  documentsService,
 });
 
 app.listen(config.port, () => {

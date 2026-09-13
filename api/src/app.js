@@ -43,6 +43,7 @@ function createApp({
   resolveCurrentUserId,
   chatTransactionHandler,
   receiptUploadHandler,
+  documentsService,
 }) {
   const app = express();
 
@@ -124,6 +125,16 @@ function createApp({
       accountId: req.query.account_id,
     });
     res.status(200).json(transactions);
+  });
+
+  app.get('/documents', async (req, res) => {
+    const userId = await resolveCurrentUserId();
+    const documents = await documentsService.listDocuments(userId, {
+      from: req.query.from,
+      to: req.query.to,
+      accountId: req.query.account_id,
+    });
+    res.status(200).json(documents);
   });
 
   app.post('/documents/extract', uploadReceiptFile, async (req, res) => {
