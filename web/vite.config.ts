@@ -17,16 +17,22 @@ function bypassBrowserNavigation(req: IncomingMessage) {
   }
 }
 
+// In Docker Compose this is set to `http://api:3000` (the api container's
+// service name) — see docker-compose.yml. Defaults to localhost for anyone
+// invoking `vite` directly outside Compose.
+const apiTarget = process.env.API_PROXY_TARGET || 'http://localhost:3000';
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    host: true,
     port: 5173,
     proxy: {
-      '/health': 'http://localhost:3000',
-      '/chat': 'http://localhost:3000',
-      '/accounts': { target: 'http://localhost:3000', bypass: bypassBrowserNavigation },
-      '/transactions': { target: 'http://localhost:3000', bypass: bypassBrowserNavigation },
-      '/documents': { target: 'http://localhost:3000', bypass: bypassBrowserNavigation },
+      '/health': apiTarget,
+      '/chat': apiTarget,
+      '/accounts': { target: apiTarget, bypass: bypassBrowserNavigation },
+      '/transactions': { target: apiTarget, bypass: bypassBrowserNavigation },
+      '/documents': { target: apiTarget, bypass: bypassBrowserNavigation },
     },
   },
 });
