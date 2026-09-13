@@ -121,7 +121,7 @@ describe('accountsService (against real Postgres)', () => {
     expect(matches[0].nickname).toBe('Chase Checking');
   });
 
-  test('returns empty when two active accounts share a last-four', async () => {
+  test('returns all active accounts sharing a last-four (caller must collapse 2+ matches to "not detected")', async () => {
     await service.createAccount(userId, { type: 'checking', institution_name: 'Chase', nickname: 'Chase Checking', last_four: '4821' });
     await service.createAccount(userId, { type: 'savings', institution_name: 'Chase', nickname: 'Chase Savings', last_four: '4821' });
     const matches = await service.findActiveAccountsByLastFour(userId, '4821');
