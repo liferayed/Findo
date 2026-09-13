@@ -104,4 +104,38 @@ describe('DocumentsPage', () => {
 
     expect(await screen.findByText('Confirm transaction')).toBeInTheDocument();
   });
+
+  it('does not show the Detected badge when the account was manually chosen via the clarification modal', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.startsWith('/accounts')) {
+        return Promise.resolve({ ok: true, json: async () => [{ id: 'a1', nickname: 'Chase Checking' }] });
+      }
+      if (url.startsWith('/documents/extract')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            file_ref: 'api/uploads/receipts/y.png',
+            original_filename: 'blurry-card.png',
+            is_readable: true,
+            extraction: { merchant: 'Store', transaction_date: '2026-09-09', total: 10, line_items: [] },
+            detected_account_id: null,
+          }),
+        });
+      }
+      if (url.startsWith('/documents')) {
+        return Promise.resolve({ ok: true, json: async () => [] });
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+
+    renderPage();
+    selectAFile();
+    fireEvent.click(screen.getByText('Upload'));
+
+    expect(await screen.findByText('Which account is this for?')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Chase Checking'));
+
+    expect(await screen.findByText('Confirm transaction')).toBeInTheDocument();
+    expect(screen.queryByText('Detected')).not.toBeInTheDocument();
+  });
 });

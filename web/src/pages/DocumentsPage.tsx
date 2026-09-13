@@ -33,7 +33,7 @@ type Stage =
   | { name: 'idle' }
   | { name: 'processing' }
   | { name: 'clarify'; extract: ExtractResult }
-  | { name: 'confirm'; extract: ExtractResult; accountId: string }
+  | { name: 'confirm'; extract: ExtractResult; accountId: string; wasDetected: boolean }
   | { name: 'manual'; fileRef: string; originalFilename: string }
   | { name: 'failed'; extract: ExtractResult };
 
@@ -95,9 +95,17 @@ export function DocumentsPage() {
     formData.append('file', file);
     formData.append('channel', 'web_upload');
 
-    const res = await fetch('/documents/extract', { method: 'POST', body: formData });
+    let res: Response;
+    try {
+      res = await fetch('/documents/extract', { method: 'POST', body: formData });
+    } catch {
+      setStage({ name: 'idle' });
+      showToast("Couldn't upload the file — check your connection and try again.");
+      return;
+    }
     if (!res.ok) {
       setStage({ name: 'idle' });
+      showToast("Couldn't upload the file — check your connection and try again.");
       return;
     }
     const result: ExtractResult = await res.json();
@@ -106,7 +114,7 @@ export function DocumentsPage() {
     if (!result.is_readable) {
       setStage({ name: 'failed', extract: result });
     } else if (result.detected_account_id) {
-      setStage({ name: 'confirm', extract: result, accountId: result.detected_account_id });
+      setStage({ name: 'confirm', extract: result, accountId: result.detected_account_id, wasDetected: true });
     } else {
       setStage({ name: 'clarify', extract: result });
     }
@@ -121,20 +129,26 @@ export function DocumentsPage() {
     amount: number;
     lineItems: Array<{ description: string; amount: number }>;
   }, onError: (message: string) => void) {
-    const res = await fetch('/documents/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        file_ref: payload.fileRef,
-        original_filename: payload.originalFilename,
-        channel: 'web_upload',
-        account_id: payload.accountId,
-        merchant: payload.merchant,
-        transaction_date: payload.transactionDate,
-        amount: payload.amount,
-        line_items: payload.lineItems,
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch('/documents/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file_ref: payload.fileRef,
+          original_filename: payload.originalFilename,
+          channel: 'web_upload',
+          account_id: payload.accountId,
+          merchant: payload.merchant,
+          transaction_date: payload.transactionDate,
+          amount: payload.amount,
+          line_items: payload.lineItems,
+        }),
+      });
+    } catch {
+      onError('Couldn\'t reach the server. Check your connection and try again.');
+      return;
+    }
     if (!res.ok) {
       onError(await parseErrorMessage(res));
       return;
@@ -234,7 +248,7 @@ export function DocumentsPage() {
             {accounts.map((account) => (
               <button
                 key={account.id}
-                onClick={() => setStage({ name: 'confirm', extract: stage.extract, accountId: account.id })}
+                onClick={() => setStage({ name: 'confirm', extract: stage.extract, accountId: account.id, wasDetected: false })}
                 className="rounded-lg border border-stone-200 px-3 py-2.5 text-left text-sm hover:border-emerald-700 hover:bg-emerald-50"
               >
                 {account.nickname}
@@ -251,7 +265,7 @@ export function DocumentsPage() {
           originalFilename={stage.extract.original_filename}
           accounts={accounts}
           initialAccountId={stage.accountId}
-          detected
+          detected={stage.wasDetected}
           merchant={stage.extract.extraction.merchant}
           transactionDate={stage.extract.extraction.transaction_date ?? isoDateDaysAgo(0)}
           amount={stage.extract.extraction.total}
@@ -428,6 +442,14 @@ function ConfirmForm({
                     setLineItems(next);
                   }}
                 />
+                <button
+                  type="button"
+                  aria-label="Remove item"
+                  className="px-1 text-xs font-semibold text-stone-400 hover:text-stone-600"
+                  onClick={() => setLineItems(lineItems.filter((_, idx) => idx !== i))}
+                >
+                  ✕
+                </button>
               </div>
             ))}
           </div>
