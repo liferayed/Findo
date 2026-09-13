@@ -1,4 +1,5 @@
 const { config } = require('../config');
+const { parseModelJson } = require('./parseModelJson');
 
 // Cold-start model load can take several seconds; warm calls are ~1-2s per the brief's
 // spike. 20s gives real headroom without letting a stuck call hang the HTTP request.
@@ -46,24 +47,6 @@ function buildPrompt(message) {
   return PROMPT_TEMPLATE.replace('{{MESSAGE}}', message);
 }
 
-function parseModelJson(responseText) {
-  try {
-    return JSON.parse(responseText);
-  } catch (err) {
-    // Defensive fallback: the model is asked for pure JSON via format:"json", but strip a
-    // stray markdown code fence before giving up, rather than crashing the caller.
-    const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(responseText || '');
-    if (fenced) {
-      try {
-        return JSON.parse(fenced[1]);
-      } catch {
-        // fall through to throw below
-      }
-    }
-    throw new Error(`ollama response was not valid JSON: ${err.message}`);
-  }
-}
-
 /**
  * Calls the local Ollama instance to extract structured transaction fields from a raw chat
  * message. Config-driven (OLLAMA_BASE_URL/OLLAMA_MODEL) per Decision 11, so moving to a
@@ -99,7 +82,7 @@ async function extractTransaction(message, { timeoutMs = EXTRACTION_TIMEOUT_MS }
     }
 
     const body = await res.json();
-    return parseModelJson(body.response);
+    return parseModelJson(body.response, 'ollama');
   })();
 
   return Promise.race([call, timeout]);

@@ -26,7 +26,9 @@ function normalizeExtraction(raw) {
   const dateHint = normalizedString(source.date_hint);
   const accountHint = normalizedString(source.account_hint);
 
-  const hasUsableAmount = amount !== null && amount > 0;
+  // coerceToPositiveNumber's own contract already guarantees `amount` is either null or a
+  // genuinely positive finite number — no need to re-check `> 0` here.
+  const hasUsableAmount = amount !== null;
   const isActionable = isTransaction && hasUsableAmount && type !== null;
 
   return {

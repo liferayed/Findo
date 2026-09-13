@@ -1,4 +1,5 @@
 const { config } = require('../config');
+const { parseModelJson } = require('./parseModelJson');
 
 // Vision extraction is slower than F1.5's text extraction — observed ~4.3s warm on the
 // commander's spike machine, cold start can be much longer (~14s observed once). 30s gives
@@ -50,24 +51,6 @@ const RESPONSE_SCHEMA = {
   required: ['merchant', 'date', 'total', 'line_items'],
 };
 
-function parseModelJson(responseText) {
-  try {
-    return JSON.parse(responseText);
-  } catch (err) {
-    // Defensive fallback: the model is asked for pure JSON via format:"json", but strip a
-    // stray markdown code fence before giving up, rather than crashing the caller.
-    const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(responseText || '');
-    if (fenced) {
-      try {
-        return JSON.parse(fenced[1]);
-      } catch {
-        // fall through to throw below
-      }
-    }
-    throw new Error(`ollama vision response was not valid JSON: ${err.message}`);
-  }
-}
-
 /**
  * Calls the local Ollama vision model to extract structured receipt fields from an image.
  * Config-driven (OLLAMA_BASE_URL/OLLAMA_VISION_MODEL), same shape as F1.5's
@@ -108,7 +91,7 @@ async function extractReceipt(imageBase64, { timeoutMs = EXTRACTION_TIMEOUT_MS }
     }
 
     const body = await res.json();
-    return parseModelJson(body.response);
+    return parseModelJson(body.response, 'ollama vision');
   })();
 
   return Promise.race([call, timeout]);
