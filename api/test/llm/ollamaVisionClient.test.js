@@ -35,7 +35,7 @@ describe('extractReceipt request contract', () => {
   });
 
   test('includes card_last_four in the response schema', async () => {
-    const fetchMock = jest.fn(async (_url, options) => {
+    const fetchMock = jest.fn(async () => {
       return { ok: true, json: async () => ({ response: '{"merchant": "Coffee", "date": null, "total": 4.5, "line_items": [], "card_last_four": "4821"}' }) };
     });
     global.fetch = fetchMock;
