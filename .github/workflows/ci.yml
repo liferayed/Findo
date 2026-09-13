@@ -31,6 +31,8 @@ jobs:
       - run: npm ci
       - name: Unit tests (api)
         run: npm test --workspace=api
+      - name: Unit tests (web)
+        run: npm test --workspace=web
       - name: Type-check + build web
         run: npm run build --workspace=web
 

@@ -8,7 +8,7 @@
     "web"
   ],
   "scripts": {
-    "test": "npm test --workspace=api",
+    "test": "npm test --workspace=api && npm test --workspace=web",
     "lint": "eslint .",
     "migrate": "npm run migrate --workspace=api",
     "seed": "npm run seed --workspace=api",
