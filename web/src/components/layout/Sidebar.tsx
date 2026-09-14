@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 
-const navLinkClass =
-  'flex items-center justify-between rounded-md px-2.5 py-2 text-sm font-medium text-stone-600 hover:bg-stone-50';
+const navLinkClass = 'flex items-center justify-between rounded-md px-2.5 py-2 text-sm font-medium hover:bg-stone-50';
+const navLinkInactiveClass = 'text-stone-600';
 const navLinkActiveClass = 'text-emerald-800 bg-emerald-50';
 
 function GroupLabel({ children }: { children: string }) {
@@ -27,13 +27,22 @@ export function Sidebar() {
   return (
     <nav className="w-48 shrink-0 border-r border-stone-200 bg-white px-3 py-4">
       <GroupLabel>Money</GroupLabel>
-      <NavLink to="/accounts" className={({ isActive }) => `${navLinkClass} ${isActive ? navLinkActiveClass : ''}`}>
+      <NavLink
+        to="/accounts"
+        className={({ isActive }) => `${navLinkClass} ${isActive ? navLinkActiveClass : navLinkInactiveClass}`}
+      >
         Accounts
       </NavLink>
-      <NavLink to="/transactions" className={({ isActive }) => `${navLinkClass} ${isActive ? navLinkActiveClass : ''}`}>
+      <NavLink
+        to="/transactions"
+        className={({ isActive }) => `${navLinkClass} ${isActive ? navLinkActiveClass : navLinkInactiveClass}`}
+      >
         Transactions
       </NavLink>
-      <NavLink to="/documents" className={({ isActive }) => `${navLinkClass} ${isActive ? navLinkActiveClass : ''}`}>
+      <NavLink
+        to="/documents"
+        className={({ isActive }) => `${navLinkClass} ${isActive ? navLinkActiveClass : navLinkInactiveClass}`}
+      >
         Documents
       </NavLink>
 
