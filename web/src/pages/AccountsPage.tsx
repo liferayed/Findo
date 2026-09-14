@@ -174,7 +174,7 @@ export function AccountsPage() {
                       <Badge tone="accent">{accountTypeLabel(account.type)}</Badge>
                     </td>
                     <td className="px-4 py-3">
-                      <Badge tone={account.is_active ? 'success' : 'muted'}>
+                      <Badge tone={account.is_active ? 'accent' : 'muted'}>
                         {account.is_active ? 'Active' : 'Inactive'}
                       </Badge>
                     </td>
