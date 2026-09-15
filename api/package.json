@@ -23,7 +23,7 @@
     "bullmq": "^6.3.4",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "ioredis": "^5.4.1",
+    "ioredis": "^6.0.0",
     "multer": "^2.3.0",
     "node-pg-migrate": "^9.0.0",
     "pg": "^8.12.0"
