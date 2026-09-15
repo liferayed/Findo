@@ -47,8 +47,8 @@ describe('AccountsPage institution autocomplete', () => {
           return {
             ok: true,
             json: async () => [
-              { id: 'i1', canonical_name: 'Chase' },
-              { id: 'i2', canonical_name: 'Wells Fargo' },
+              { id: 'i1', canonical_name: 'Chase', aliases: ['Chase', 'Chase Bank'] },
+              { id: 'i2', canonical_name: 'Bank of America', aliases: ['Bank of America', 'BofA'] },
             ],
           };
         }
@@ -61,7 +61,7 @@ describe('AccountsPage institution autocomplete', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders fetched institutions as datalist options', async () => {
+  it('renders fetched institutions as datalist options, including aliases', async () => {
     render(
       <MemoryRouter>
         <AccountsPage />
@@ -76,7 +76,8 @@ describe('AccountsPage institution autocomplete', () => {
       const options = screen.getAllByRole('option', { hidden: true });
       const values = options.map((o) => (o as HTMLOptionElement).value);
       expect(values).toContain('Chase');
-      expect(values).toContain('Wells Fargo');
+      expect(values).toContain('Bank of America');
+      expect(values).toContain('BofA');
     });
   });
 

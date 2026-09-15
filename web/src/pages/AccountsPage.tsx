@@ -39,7 +39,7 @@ export function AccountsPage() {
   const [lastFour, setLastFour] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [institutions, setInstitutions] = useState<{ id: string; canonical_name: string }[]>([]);
+  const [institutions, setInstitutions] = useState<{ id: string; canonical_name: string; aliases: string[] }[]>([]);
 
   async function loadAccounts() {
     const res = await fetch('/accounts');
@@ -136,8 +136,8 @@ export function AccountsPage() {
             className={inputClass}
           />
           <datalist id="institutions-datalist">
-            {institutions.map((inst) => (
-              <option key={inst.id} value={inst.canonical_name} />
+            {Array.from(new Set(institutions.flatMap((inst) => inst.aliases))).map((alias) => (
+              <option key={alias} value={alias} />
             ))}
           </datalist>
           <input
