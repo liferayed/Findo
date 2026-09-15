@@ -136,7 +136,7 @@ export function AccountsPage() {
             className={inputClass}
           />
           <datalist id="institutions-datalist">
-            {Array.from(new Set(institutions.flatMap((inst) => inst.aliases))).map((alias) => (
+            {Array.from(new Set(institutions.flatMap((inst) => inst.aliases ?? []))).map((alias) => (
               <option key={alias} value={alias} />
             ))}
           </datalist>
