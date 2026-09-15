@@ -1,5 +1,9 @@
 FROM node:22-alpine
 
+# poppler-utils (pdftoppm): renders PDF pages to images for F1.7's vision-only statement
+# extraction pipeline (decision: see planning/F1.7 - Statement Upload - Brainstorm.md).
+RUN apk add --no-cache poppler-utils
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./

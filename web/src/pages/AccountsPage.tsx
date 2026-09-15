@@ -39,6 +39,7 @@ export function AccountsPage() {
   const [lastFour, setLastFour] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [institutions, setInstitutions] = useState<{ id: string; canonical_name: string; aliases: string[] }[]>([]);
 
   async function loadAccounts() {
     const res = await fetch('/accounts');
@@ -47,8 +48,16 @@ export function AccountsPage() {
     }
   }
 
+  async function loadInstitutions() {
+    const res = await fetch('/institutions');
+    if (res.ok) {
+      setInstitutions(await res.json());
+    }
+  }
+
   useEffect(() => {
     loadAccounts();
+    loadInstitutions();
   }, []);
 
   async function handleSubmit(event: React.FormEvent) {
@@ -122,9 +131,15 @@ export function AccountsPage() {
             value={institutionName}
             onChange={(e) => setInstitutionName(e.target.value)}
             placeholder="Institution (e.g. Chase)"
+            list="institutions-datalist"
             required
             className={inputClass}
           />
+          <datalist id="institutions-datalist">
+            {Array.from(new Set(institutions.flatMap((inst) => inst.aliases ?? []))).map((alias) => (
+              <option key={alias} value={alias} />
+            ))}
+          </datalist>
           <input
             value={lastFour}
             onChange={(e) => setLastFour(e.target.value)}

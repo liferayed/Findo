@@ -30,6 +30,7 @@ export default defineConfig({
     proxy: {
       '/health': apiTarget,
       '/chat': apiTarget,
+      '/institutions': apiTarget,
       '/accounts': { target: apiTarget, bypass: bypassBrowserNavigation },
       '/transactions': { target: apiTarget, bypass: bypassBrowserNavigation },
       '/documents': { target: apiTarget, bypass: bypassBrowserNavigation },
