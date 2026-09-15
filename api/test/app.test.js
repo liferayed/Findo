@@ -687,8 +687,8 @@ describe('GET /institutions', () => {
       buildApp({
         institutionsService: {
           listInstitutions: async () => [
-            { id: 'i1', canonical_name: 'Chase' },
-            { id: 'i2', canonical_name: 'Wells Fargo' },
+            { id: 'i1', canonical_name: 'Chase', aliases: ['Chase', 'Chase Bank'] },
+            { id: 'i2', canonical_name: 'Wells Fargo', aliases: ['Wells Fargo'] },
           ],
           resolveInstitutionAlias: async () => null,
         },
@@ -697,8 +697,8 @@ describe('GET /institutions', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([
-      { id: 'i1', canonical_name: 'Chase' },
-      { id: 'i2', canonical_name: 'Wells Fargo' },
+      { id: 'i1', canonical_name: 'Chase', aliases: ['Chase', 'Chase Bank'] },
+      { id: 'i2', canonical_name: 'Wells Fargo', aliases: ['Wells Fargo'] },
     ]);
   });
 });

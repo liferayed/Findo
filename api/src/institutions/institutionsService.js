@@ -1,7 +1,12 @@
 function createInstitutionsService({ pool }) {
   async function listInstitutions() {
     const { rows } = await pool.query(
-      'SELECT id, canonical_name FROM institutions ORDER BY canonical_name ASC'
+      `SELECT i.id, i.canonical_name,
+              COALESCE(array_agg(a.alias ORDER BY a.alias) FILTER (WHERE a.alias IS NOT NULL), ARRAY[]::text[]) AS aliases
+       FROM institutions i
+       LEFT JOIN institution_aliases a ON a.institution_id = i.id
+       GROUP BY i.id, i.canonical_name
+       ORDER BY i.canonical_name ASC`
     );
     return rows;
   }

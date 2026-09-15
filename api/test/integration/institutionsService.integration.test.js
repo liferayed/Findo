@@ -16,6 +16,12 @@ describe('institutionsService (against real Postgres)', () => {
     expect([...names].sort()).toEqual(names);
   });
 
+  test('listInstitutions includes each institution\'s aliases, sorted', async () => {
+    const institutions = await service.listInstitutions();
+    const chase = institutions.find((i) => i.canonical_name === 'Chase');
+    expect(chase.aliases).toEqual(['Chase', 'Chase Bank', 'JPMorgan Chase', 'JPMorgan Chase Bank, N.A.']);
+  });
+
   test('resolveInstitutionAlias matches the canonical name itself, case-insensitively', async () => {
     await expect(service.resolveInstitutionAlias('chase')).resolves.toBe('Chase');
   });
