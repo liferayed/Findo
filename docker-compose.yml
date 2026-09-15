@@ -60,9 +60,18 @@ services:
       - "5173:5173"
     environment:
       API_PROXY_TARGET: http://api:3000
+    # Two node_modules volumes: npm workspaces hoists most deps to the root
+    # /app/node_modules, but not everything — e.g. @vitejs/plugin-react and a
+    # few others resolve into /app/web/node_modules instead (npm's own
+    # hoisting decision, not something this compose file controls). The .:/app
+    # bind mount shadows both paths with the host's checkout, which has no
+    # node_modules at all (gitignored) — so without a named volume protecting
+    # /app/web/node_modules specifically, any package that lands there
+    # disappears at runtime even though the image built it correctly.
     volumes:
       - .:/app
       - web-node-modules:/app/node_modules
+      - web-workspace-node-modules:/app/web/node_modules
     working_dir: /app/web
     command: npm run dev
     depends_on:
@@ -72,3 +81,4 @@ volumes:
   findo-postgres-data:
   api-node-modules:
   web-node-modules:
+  web-workspace-node-modules:
