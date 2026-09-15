@@ -18,6 +18,14 @@ function buildApp(overrides = {}) {
         throw new Error('updateAccount not stubbed');
       },
     },
+    institutionsService: {
+      listInstitutions: async () => {
+        throw new Error('listInstitutions not stubbed');
+      },
+      resolveInstitutionAlias: async () => {
+        throw new Error('resolveInstitutionAlias not stubbed');
+      },
+    },
     transactionsService: {
       createTransaction: async () => {
         throw new Error('createTransaction not stubbed');
@@ -598,5 +606,27 @@ describe('PATCH /accounts/:id', () => {
     const res = await request(app).patch('/accounts/does-not-exist').send({ nickname: 'New-Name' });
 
     expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /institutions', () => {
+  test('returns 200 with the institution list', async () => {
+    const res = await request(
+      buildApp({
+        institutionsService: {
+          listInstitutions: async () => [
+            { id: 'i1', canonical_name: 'Chase' },
+            { id: 'i2', canonical_name: 'Wells Fargo' },
+          ],
+          resolveInstitutionAlias: async () => null,
+        },
+      })
+    ).get('/institutions');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      { id: 'i1', canonical_name: 'Chase' },
+      { id: 'i2', canonical_name: 'Wells Fargo' },
+    ]);
   });
 });

@@ -39,6 +39,7 @@ function uploadReceiptFile(req, res, next) {
 function createApp({
   checkHealth,
   accountsService,
+  institutionsService,
   transactionsService,
   resolveCurrentUserId,
   chatTransactionHandler,
@@ -87,6 +88,11 @@ function createApp({
         throw err;
       }
     }
+  });
+
+  app.get('/institutions', async (req, res) => {
+    const institutions = await institutionsService.listInstitutions();
+    res.status(200).json(institutions);
   });
 
   app.post('/transactions', async (req, res) => {
