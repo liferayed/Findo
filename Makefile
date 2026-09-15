@@ -3,8 +3,8 @@
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-up: ## Start Postgres, Redis, api, and web (detached)
-	docker compose up -d
+up: ## Rebuild (if needed) and start Postgres, Redis, api, and web (detached)
+	docker compose up --build -d
 
 down: ## Stop and remove all containers
 	docker compose down
@@ -18,8 +18,8 @@ setup: install up ## First-time setup: build images, start everything, migrate, 
 	@echo "Setup complete. Also make sure Ollama is running locally with llama3.2:3b and qwen2.5vl:3b pulled (see README)."
 	@echo "Everything is already up in the background — run 'make dev' if you want the logs attached in this terminal."
 
-dev: ## Run Postgres, Redis, api, and web together with logs attached (Ctrl+C stops all)
-	docker compose up
+dev: ## Rebuild (if needed) and run Postgres, Redis, api, and web together with logs attached (Ctrl+C stops all)
+	docker compose up --build
 
 migrate: ## Apply database migrations (inside the api container)
 	docker compose exec api npm run migrate -- up
