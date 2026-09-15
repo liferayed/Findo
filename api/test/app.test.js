@@ -359,6 +359,10 @@ describe('POST /chat/messages — F1.5 transaction capture wiring', () => {
   test('an "add ... account" message never reaches chatTransactionHandler', async () => {
     let called = false;
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async (userId, input) => ({ id: 'acc-1', ...input }),
       },
@@ -368,8 +372,11 @@ describe('POST /chat/messages — F1.5 transaction capture wiring', () => {
       },
     });
 
-    await request(app).post('/chat/messages').send({ text: 'Add my Chase checking account, call it Chase-Checking' });
+    const res = await request(app)
+      .post('/chat/messages')
+      .send({ text: 'Add my Chase checking account, call it Chase-Checking' });
 
+    expect(res.status).toBe(201);
     expect(called).toBe(false);
   });
 });
