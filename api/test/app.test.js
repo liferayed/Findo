@@ -223,10 +223,6 @@ describe('POST /chat/messages', () => {
   test('an unparseable "add ... account" message asks for the account type instead of guessing', async () => {
     let called = false;
     const app = buildApp({
-      institutionsService: {
-        listInstitutions: async () => [],
-        resolveInstitutionAlias: async () => null,
-      },
       accountsService: {
         createAccount: async () => {
           called = true;
