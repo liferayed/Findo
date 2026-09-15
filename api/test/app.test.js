@@ -591,6 +591,10 @@ describe('POST /documents/confirm', () => {
 describe('POST /accounts', () => {
   test('creates an account and returns 201', async () => {
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async (userId, input) => ({ id: 'acc-1', user_id: userId, ...input }),
       },
@@ -606,6 +610,10 @@ describe('POST /accounts', () => {
 
   test('returns 400 with the validation errors when the service rejects the input', async () => {
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async () => {
           throw new ValidationError(['nickname is required']);
@@ -621,6 +629,10 @@ describe('POST /accounts', () => {
 
   test('returns 409 when the service reports a duplicate nickname', async () => {
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async () => {
           throw new ConflictError('an account named "Chase-Checking" already exists');
@@ -634,6 +646,52 @@ describe('POST /accounts', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error).toContain('already exists');
+  });
+
+  test('resolves institution_name to its canonical form before creating the account', async () => {
+    let capturedInput = null;
+    const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async (rawText) => (rawText === 'chase' ? 'Chase' : null),
+      },
+      accountsService: {
+        createAccount: async (userId, input) => {
+          capturedInput = input;
+          return { id: 'acc-1', user_id: userId, ...input };
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post('/accounts')
+      .send({ nickname: 'Chase-Checking', type: 'checking', institution_name: 'chase' });
+
+    expect(res.status).toBe(201);
+    expect(capturedInput.institution_name).toBe('Chase');
+  });
+
+  test('falls back to the submitted institution_name when no alias matches', async () => {
+    let capturedInput = null;
+    const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
+      accountsService: {
+        createAccount: async (userId, input) => {
+          capturedInput = input;
+          return { id: 'acc-1', user_id: userId, ...input };
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post('/accounts')
+      .send({ nickname: 'Local-Checking', type: 'checking', institution_name: 'Local Credit Union' });
+
+    expect(res.status).toBe(201);
+    expect(capturedInput.institution_name).toBe('Local Credit Union');
   });
 });
 
