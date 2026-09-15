@@ -237,7 +237,11 @@ function createApp({
 
       try {
         const userId = await resolveCurrentUserId();
-        const account = await accountsService.createAccount(userId, parsed);
+        const resolvedInstitutionName = await institutionsService.resolveInstitutionAlias(parsed.institution_name);
+        const account = await accountsService.createAccount(userId, {
+          ...parsed,
+          institution_name: resolvedInstitutionName || parsed.institution_name,
+        });
         return res
           .status(201)
           .json({ received: text, reply: `Got it — added ${account.nickname} (${account.institution_name}, ${account.type}).` });

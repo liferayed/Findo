@@ -196,6 +196,10 @@ describe('POST /chat/messages', () => {
   test('an "add my ... account" message creates an account via the shared service', async () => {
     let receivedInput;
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async (userId, input) => {
           receivedInput = { userId, input };
@@ -219,6 +223,10 @@ describe('POST /chat/messages', () => {
   test('an unparseable "add ... account" message asks for the account type instead of guessing', async () => {
     let called = false;
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async () => {
           called = true;
@@ -235,6 +243,10 @@ describe('POST /chat/messages', () => {
 
   test('a duplicate-nickname account-creation message surfaces the conflict in the chat reply', async () => {
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async () => {
           throw new ConflictError('an account named "Chase-Checking" already exists');
@@ -248,6 +260,63 @@ describe('POST /chat/messages', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.reply).toEqual(expect.stringContaining('already exists'));
+  });
+});
+
+describe('POST /chat/messages — account creation resolves institution aliases', () => {
+  test('resolves a known alias to its canonical name before creating the account', async () => {
+    let capturedInput = null;
+    const res = await request(
+      buildApp({
+        institutionsService: {
+          listInstitutions: async () => [],
+          // Deliberately returns a value that DIFFERS from the raw parsed text ("Chase"), so
+          // this test can only pass once the route actually uses the resolver's return value —
+          // if it stubbed resolveInstitutionAlias to return "Chase" itself, the raw-text
+          // fallback path would produce the same result by coincidence and the test would pass
+          // before the feature is wired up, hiding a real red-green gap.
+          resolveInstitutionAlias: async (rawText) => (rawText === 'Chase' ? 'Chase Canonical Test' : null),
+        },
+        accountsService: {
+          createAccount: async (userId, input) => {
+            capturedInput = input;
+            return { id: 'a1', nickname: input.nickname, institution_name: input.institution_name, type: input.type };
+          },
+          listAccounts: async () => [],
+          updateAccount: async () => {
+            throw new Error('updateAccount not stubbed');
+          },
+        },
+      })
+    ).post('/chat/messages').send({ text: 'Add my Chase checking account' });
+
+    expect(res.status).toBe(201);
+    expect(capturedInput.institution_name).toBe('Chase Canonical Test');
+  });
+
+  test('falls back to the raw parsed text when no alias matches', async () => {
+    let capturedInput = null;
+    const res = await request(
+      buildApp({
+        institutionsService: {
+          listInstitutions: async () => [],
+          resolveInstitutionAlias: async () => null,
+        },
+        accountsService: {
+          createAccount: async (userId, input) => {
+            capturedInput = input;
+            return { id: 'a1', nickname: input.nickname, institution_name: input.institution_name, type: input.type };
+          },
+          listAccounts: async () => [],
+          updateAccount: async () => {
+            throw new Error('updateAccount not stubbed');
+          },
+        },
+      })
+    ).post('/chat/messages').send({ text: 'Add my Local Credit Union checking account' });
+
+    expect(res.status).toBe(201);
+    expect(capturedInput.institution_name).toBe('Local Credit Union');
   });
 });
 
