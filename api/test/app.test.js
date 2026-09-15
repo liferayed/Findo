@@ -18,6 +18,14 @@ function buildApp(overrides = {}) {
         throw new Error('updateAccount not stubbed');
       },
     },
+    institutionsService: {
+      listInstitutions: async () => {
+        throw new Error('listInstitutions not stubbed');
+      },
+      resolveInstitutionAlias: async () => {
+        throw new Error('resolveInstitutionAlias not stubbed');
+      },
+    },
     transactionsService: {
       createTransaction: async () => {
         throw new Error('createTransaction not stubbed');
@@ -188,6 +196,10 @@ describe('POST /chat/messages', () => {
   test('an "add my ... account" message creates an account via the shared service', async () => {
     let receivedInput;
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async (userId, input) => {
           receivedInput = { userId, input };
@@ -227,6 +239,10 @@ describe('POST /chat/messages', () => {
 
   test('a duplicate-nickname account-creation message surfaces the conflict in the chat reply', async () => {
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async () => {
           throw new ConflictError('an account named "Chase-Checking" already exists');
@@ -240,6 +256,63 @@ describe('POST /chat/messages', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.reply).toEqual(expect.stringContaining('already exists'));
+  });
+});
+
+describe('POST /chat/messages — account creation resolves institution aliases', () => {
+  test('resolves a known alias to its canonical name before creating the account', async () => {
+    let capturedInput = null;
+    const res = await request(
+      buildApp({
+        institutionsService: {
+          listInstitutions: async () => [],
+          // Deliberately returns a value that DIFFERS from the raw parsed text ("Chase"), so
+          // this test can only pass once the route actually uses the resolver's return value —
+          // if it stubbed resolveInstitutionAlias to return "Chase" itself, the raw-text
+          // fallback path would produce the same result by coincidence and the test would pass
+          // before the feature is wired up, hiding a real red-green gap.
+          resolveInstitutionAlias: async (rawText) => (rawText === 'Chase' ? 'Chase Canonical Test' : null),
+        },
+        accountsService: {
+          createAccount: async (userId, input) => {
+            capturedInput = input;
+            return { id: 'a1', nickname: input.nickname, institution_name: input.institution_name, type: input.type };
+          },
+          listAccounts: async () => [],
+          updateAccount: async () => {
+            throw new Error('updateAccount not stubbed');
+          },
+        },
+      })
+    ).post('/chat/messages').send({ text: 'Add my Chase checking account' });
+
+    expect(res.status).toBe(201);
+    expect(capturedInput.institution_name).toBe('Chase Canonical Test');
+  });
+
+  test('falls back to the raw parsed text when no alias matches', async () => {
+    let capturedInput = null;
+    const res = await request(
+      buildApp({
+        institutionsService: {
+          listInstitutions: async () => [],
+          resolveInstitutionAlias: async () => null,
+        },
+        accountsService: {
+          createAccount: async (userId, input) => {
+            capturedInput = input;
+            return { id: 'a1', nickname: input.nickname, institution_name: input.institution_name, type: input.type };
+          },
+          listAccounts: async () => [],
+          updateAccount: async () => {
+            throw new Error('updateAccount not stubbed');
+          },
+        },
+      })
+    ).post('/chat/messages').send({ text: 'Add my Local Credit Union checking account' });
+
+    expect(res.status).toBe(201);
+    expect(capturedInput.institution_name).toBe('Local Credit Union');
   });
 });
 
@@ -286,6 +359,10 @@ describe('POST /chat/messages — F1.5 transaction capture wiring', () => {
   test('an "add ... account" message never reaches chatTransactionHandler', async () => {
     let called = false;
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async (userId, input) => ({ id: 'acc-1', ...input }),
       },
@@ -295,8 +372,11 @@ describe('POST /chat/messages — F1.5 transaction capture wiring', () => {
       },
     });
 
-    await request(app).post('/chat/messages').send({ text: 'Add my Chase checking account, call it Chase-Checking' });
+    const res = await request(app)
+      .post('/chat/messages')
+      .send({ text: 'Add my Chase checking account, call it Chase-Checking' });
 
+    expect(res.status).toBe(201);
     expect(called).toBe(false);
   });
 });
@@ -511,6 +591,10 @@ describe('POST /documents/confirm', () => {
 describe('POST /accounts', () => {
   test('creates an account and returns 201', async () => {
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async (userId, input) => ({ id: 'acc-1', user_id: userId, ...input }),
       },
@@ -526,6 +610,10 @@ describe('POST /accounts', () => {
 
   test('returns 400 with the validation errors when the service rejects the input', async () => {
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async () => {
           throw new ValidationError(['nickname is required']);
@@ -541,6 +629,10 @@ describe('POST /accounts', () => {
 
   test('returns 409 when the service reports a duplicate nickname', async () => {
     const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
       accountsService: {
         createAccount: async () => {
           throw new ConflictError('an account named "Chase-Checking" already exists');
@@ -554,6 +646,52 @@ describe('POST /accounts', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error).toContain('already exists');
+  });
+
+  test('resolves institution_name to its canonical form before creating the account', async () => {
+    let capturedInput = null;
+    const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async (rawText) => (rawText === 'chase' ? 'Chase' : null),
+      },
+      accountsService: {
+        createAccount: async (userId, input) => {
+          capturedInput = input;
+          return { id: 'acc-1', user_id: userId, ...input };
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post('/accounts')
+      .send({ nickname: 'Chase-Checking', type: 'checking', institution_name: 'chase' });
+
+    expect(res.status).toBe(201);
+    expect(capturedInput.institution_name).toBe('Chase');
+  });
+
+  test('falls back to the submitted institution_name when no alias matches', async () => {
+    let capturedInput = null;
+    const app = buildApp({
+      institutionsService: {
+        listInstitutions: async () => [],
+        resolveInstitutionAlias: async () => null,
+      },
+      accountsService: {
+        createAccount: async (userId, input) => {
+          capturedInput = input;
+          return { id: 'acc-1', user_id: userId, ...input };
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post('/accounts')
+      .send({ nickname: 'Local-Checking', type: 'checking', institution_name: 'Local Credit Union' });
+
+    expect(res.status).toBe(201);
+    expect(capturedInput.institution_name).toBe('Local Credit Union');
   });
 });
 
@@ -598,5 +736,27 @@ describe('PATCH /accounts/:id', () => {
     const res = await request(app).patch('/accounts/does-not-exist').send({ nickname: 'New-Name' });
 
     expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /institutions', () => {
+  test('returns 200 with the institution list', async () => {
+    const res = await request(
+      buildApp({
+        institutionsService: {
+          listInstitutions: async () => [
+            { id: 'i1', canonical_name: 'Chase', aliases: ['Chase', 'Chase Bank'] },
+            { id: 'i2', canonical_name: 'Wells Fargo', aliases: ['Wells Fargo'] },
+          ],
+          resolveInstitutionAlias: async () => null,
+        },
+      })
+    ).get('/institutions');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      { id: 'i1', canonical_name: 'Chase', aliases: ['Chase', 'Chase Bank'] },
+      { id: 'i2', canonical_name: 'Wells Fargo', aliases: ['Wells Fargo'] },
+    ]);
   });
 });

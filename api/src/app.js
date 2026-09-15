@@ -39,6 +39,7 @@ function uploadReceiptFile(req, res, next) {
 function createApp({
   checkHealth,
   accountsService,
+  institutionsService,
   transactionsService,
   resolveCurrentUserId,
   chatTransactionHandler,
@@ -58,7 +59,12 @@ function createApp({
   app.post('/accounts', async (req, res) => {
     try {
       const userId = await resolveCurrentUserId();
-      const account = await accountsService.createAccount(userId, req.body || {});
+      const body = req.body || {};
+      const resolvedInstitutionName = await institutionsService.resolveInstitutionAlias(body.institution_name);
+      const account = await accountsService.createAccount(userId, {
+        ...body,
+        institution_name: resolvedInstitutionName || body.institution_name,
+      });
       res.status(201).json(account);
     } catch (err) {
       if (err.statusCode) {
@@ -80,6 +86,19 @@ function createApp({
       const userId = await resolveCurrentUserId();
       const account = await accountsService.updateAccount(userId, req.params.id, req.body || {});
       res.status(200).json(account);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.get('/institutions', async (req, res) => {
+    try {
+      const institutions = await institutionsService.listInstitutions();
+      res.status(200).json(institutions);
     } catch (err) {
       if (err.statusCode) {
         res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
@@ -231,7 +250,11 @@ function createApp({
 
       try {
         const userId = await resolveCurrentUserId();
-        const account = await accountsService.createAccount(userId, parsed);
+        const resolvedInstitutionName = await institutionsService.resolveInstitutionAlias(parsed.institution_name);
+        const account = await accountsService.createAccount(userId, {
+          ...parsed,
+          institution_name: resolvedInstitutionName || parsed.institution_name,
+        });
         return res
           .status(201)
           .json({ received: text, reply: `Got it — added ${account.nickname} (${account.institution_name}, ${account.type}).` });
