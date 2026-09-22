@@ -20,7 +20,7 @@
     ]
   },
   "dependencies": {
-    "bullmq": "^6.3.4",
+    "bullmq": "^6.3.8",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "ioredis": "^6.0.0",
