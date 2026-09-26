@@ -2,7 +2,7 @@ const { validateAccountInput } = require('./validateAccountInput');
 const { ValidationError, ConflictError, NotFoundError } = require('../errors');
 
 const ACCOUNT_COLUMNS =
-  'id, user_id, type, institution_name, nickname, last_four, current_balance, currency, is_active, created_at';
+  'id, user_id, type, institution_name, nickname, last_four, current_balance, opening_balance, balance_as_of_date, currency, is_active, created_at';
 
 function createAccountsService({ pool }) {
   async function createAccount(userId, input) {
