@@ -1,4 +1,5 @@
 const { validateTransactionInput } = require('./validateTransactionInput');
+const { applyTransactionToBalance } = require('../accounts/balance');
 const { ValidationError, NotFoundError } = require('../errors');
 
 const TRANSACTION_COLUMNS =
@@ -16,6 +17,39 @@ function createTransactionsService({ pool }) {
     }
   }
 
+  // Runs `fn(client)` inside a transaction. If the caller supplied a client it already owns the
+  // BEGIN/COMMIT (F1.6's confirm flow), so we just use it; otherwise we open and finish our own.
+  async function inTransaction(callerClient, fn) {
+    if (callerClient) {
+      return fn(callerClient);
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await fn(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // The single INSERT + balance-update every creation path goes through (CP-004). `signedAmount`
+  // is what gets stored in transactions.amount and added to current_balance.
+  async function insertTransaction(client, { accountId, transactionDate, signedAmount, merchantRaw, type, isManual, reconciliationStatus }) {
+    const { rows } = await client.query(
+      `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, type, is_manual, reconciliation_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING ${TRANSACTION_COLUMNS}`,
+      [accountId, transactionDate, signedAmount, merchantRaw, type, isManual, reconciliationStatus]
+    );
+    await applyTransactionToBalance(client, accountId, signedAmount);
+    return rows[0];
+  }
+
   async function createTransaction(userId, input) {
     const errors = validateTransactionInput(input);
     if (errors.length > 0) {
@@ -29,13 +63,17 @@ function createTransactionsService({ pool }) {
 
     const signedAmount = input.type === 'debit' ? -input.amount : input.amount;
 
-    const { rows } = await pool.query(
-      `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, type, is_manual, reconciliation_status)
-       VALUES ($1, $2, $3, $4, $5, true, 'confirmed')
-       RETURNING ${TRANSACTION_COLUMNS}`,
-      [input.account_id, input.transaction_date, signedAmount, input.merchant_raw, input.type]
+    return inTransaction(null, (client) =>
+      insertTransaction(client, {
+        accountId: input.account_id,
+        transactionDate: input.transaction_date,
+        signedAmount,
+        merchantRaw: input.merchant_raw,
+        type: input.type,
+        isManual: true,
+        reconciliationStatus: 'confirmed',
+      })
     );
-    return rows[0];
   }
 
   // Used by the chat transaction-capture flow (F1.5). The input shape here differs enough
@@ -48,13 +86,17 @@ function createTransactionsService({ pool }) {
 
     const signedAmount = type === 'debit' ? -amount : amount;
 
-    const { rows } = await pool.query(
-      `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, type, is_manual, reconciliation_status)
-       VALUES ($1, $2, $3, $4, $5, false, $6)
-       RETURNING ${TRANSACTION_COLUMNS}`,
-      [accountId, transactionDate, signedAmount, merchantRaw, type, reconciliationStatus]
+    return inTransaction(null, (client) =>
+      insertTransaction(client, {
+        accountId,
+        transactionDate,
+        signedAmount,
+        merchantRaw,
+        type,
+        isManual: false,
+        reconciliationStatus,
+      })
     );
-    return rows[0];
   }
 
   // Used by the receipt-upload flow (F1.6). Type is always 'debit' (a receipt is a purchase —
@@ -72,21 +114,24 @@ function createTransactionsService({ pool }) {
   // Accepts an optional `client` (a checked-out pg client, e.g. from pool.connect()) so the
   // caller can run this INSERT as part of a larger BEGIN/COMMIT transaction alongside its own
   // writes (documents/receiptUploadService.js does this to keep the transaction row and its
-  // shared_items/documents/transaction_sources provenance atomic). Defaults to the service's
-  // own pool when no client is given, matching every other method here.
+  // shared_items/documents/transaction_sources provenance atomic). When no client is given, opens its
+  // own transaction so the INSERT and balance update still commit together.
   async function createTransactionFromReceipt(userId, { accountId, transactionDate, amount, merchantRaw, isManual = false }, { client } = {}) {
     await findOwnedAccount(userId, accountId, { requireActive: true });
 
     const signedAmount = -amount;
-    const executor = client || pool;
 
-    const { rows } = await executor.query(
-      `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, type, is_manual, reconciliation_status)
-       VALUES ($1, $2, $3, $4, 'debit', $5, 'confirmed')
-       RETURNING ${TRANSACTION_COLUMNS}`,
-      [accountId, transactionDate, signedAmount, merchantRaw, isManual]
+    return inTransaction(client, (c) =>
+      insertTransaction(c, {
+        accountId,
+        transactionDate,
+        signedAmount,
+        merchantRaw,
+        type: 'debit',
+        isManual,
+        reconciliationStatus: 'confirmed',
+      })
     );
-    return rows[0];
   }
 
   async function listTransactionsForAccount(userId, accountId) {

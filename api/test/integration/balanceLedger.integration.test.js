@@ -2,6 +2,18 @@ const { pool } = require('../../src/db');
 const { createAccountsService } = require('../../src/accounts/accountsService');
 
 const accountsService = createAccountsService({ pool });
+const { createTransactionsService } = require('../../src/transactions/transactionsService');
+const transactionsService = createTransactionsService({ pool });
+
+async function balanceOf(accountId) {
+  const { rows } = await pool.query('SELECT current_balance FROM accounts WHERE id = $1', [accountId]);
+  return Number(rows[0].current_balance);
+}
+
+async function countTransactions(accountId) {
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM transactions WHERE account_id = $1', [accountId]);
+  return rows[0].n;
+}
 
 async function createTestUser(email) {
   const { rows } = await pool.query(`INSERT INTO users (email, name) VALUES ($1, $2) RETURNING id`, [email, 'Test User']);
@@ -32,5 +44,76 @@ describe('balance ledger (against real Postgres)', () => {
   test('a new account starts with opening_balance 0 and no balance_as_of_date', () => {
     expect(Number(account.opening_balance)).toBe(0);
     expect(account.balance_as_of_date).toBeNull();
+  });
+
+  test('manual debit and credit move current_balance by the signed amount', async () => {
+    await transactionsService.createTransaction(userId, {
+      account_id: account.id, transaction_date: '2026-01-15', amount: 40, type: 'debit', merchant_raw: 'Coffee',
+    });
+    expect(await balanceOf(account.id)).toBe(-40);
+    await transactionsService.createTransaction(userId, {
+      account_id: account.id, transaction_date: '2026-01-16', amount: 100, type: 'credit', merchant_raw: 'Refund',
+    });
+    expect(await balanceOf(account.id)).toBe(60);
+  });
+
+  test('chat capture moves current_balance', async () => {
+    await transactionsService.createTransactionFromChat(userId, {
+      accountId: account.id, transactionDate: '2026-01-15', amount: 25, merchantRaw: 'Lunch', type: 'debit',
+      reconciliationStatus: 'unconfirmed',
+    });
+    expect(await balanceOf(account.id)).toBe(-25);
+  });
+
+  test('receipt creation moves current_balance', async () => {
+    await transactionsService.createTransactionFromReceipt(userId, {
+      accountId: account.id, transactionDate: '2026-01-15', amount: 12.5, merchantRaw: 'Cafe',
+    });
+    expect(await balanceOf(account.id)).toBe(-12.5);
+  });
+
+  test('receipt creation inside a caller-owned transaction rolls back both the row and the balance', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await transactionsService.createTransactionFromReceipt(
+        userId,
+        { accountId: account.id, transactionDate: '2026-01-15', amount: 12.5, merchantRaw: 'Cafe' },
+        { client }
+      );
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
+    expect(await balanceOf(account.id)).toBe(0);
+    expect(await countTransactions(account.id)).toBe(0);
+  });
+
+  test('if the balance update fails, no transaction row is left behind (self-owned transaction)', async () => {
+    // Force the UPDATE to fail after the INSERT succeeds, using a real constraint.
+    await pool.query('ALTER TABLE accounts ADD CONSTRAINT tmp_ledger_floor CHECK (current_balance >= -1000)');
+    try {
+      await expect(
+        transactionsService.createTransaction(userId, {
+          account_id: account.id, transaction_date: '2026-01-15', amount: 5000, type: 'debit', merchant_raw: 'Big',
+        })
+      ).rejects.toThrow();
+    } finally {
+      await pool.query('ALTER TABLE accounts DROP CONSTRAINT tmp_ledger_floor');
+    }
+    expect(await balanceOf(account.id)).toBe(0);
+    expect(await countTransactions(account.id)).toBe(0);
+  });
+
+  test('concurrent creates on one account all land in the balance (no lost updates)', async () => {
+    await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        transactionsService.createTransaction(userId, {
+          account_id: account.id, transaction_date: '2026-01-15', amount: 10, type: 'debit', merchant_raw: `M${i}`,
+        })
+      )
+    );
+    expect(await balanceOf(account.id)).toBe(-100);
+    expect(await countTransactions(account.id)).toBe(10);
   });
 });
