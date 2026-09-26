@@ -1,5 +1,6 @@
 const { pool } = require('../../src/db');
 const { createAccountsService } = require('../../src/accounts/accountsService');
+const { getBalanceAsOf } = require('../../src/accounts/balance');
 
 const accountsService = createAccountsService({ pool });
 const { createTransactionsService } = require('../../src/transactions/transactionsService');
@@ -115,5 +116,20 @@ describe('balance ledger (against real Postgres)', () => {
     );
     expect(await balanceOf(account.id)).toBe(-100);
     expect(await countTransactions(account.id)).toBe(10);
+  });
+
+  test('getBalanceAsOf reconstructs the balance at any date, including with no transactions', async () => {
+    await pool.query('UPDATE accounts SET opening_balance = 500, current_balance = 500 WHERE id = $1', [account.id]);
+    await transactionsService.createTransaction(userId, {
+      account_id: account.id, transaction_date: '2026-01-10', amount: 100, type: 'debit', merchant_raw: 'A',
+    });
+    await transactionsService.createTransaction(userId, {
+      account_id: account.id, transaction_date: '2026-01-20', amount: 30, type: 'credit', merchant_raw: 'B',
+    });
+
+    expect(await getBalanceAsOf(pool, account.id, '2026-01-05')).toBe(500);
+    expect(await getBalanceAsOf(pool, account.id, '2026-01-10')).toBe(400);
+    expect(await getBalanceAsOf(pool, account.id, '2026-02-01')).toBe(430);
+    expect(await balanceOf(account.id)).toBe(430);
   });
 });
