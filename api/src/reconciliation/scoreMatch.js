@@ -51,7 +51,7 @@ function dateProximity(dateA, dateB) {
 
 function scoreMerchantAndDate({ extracted, candidate }) {
   const score =
-    MERCHANT_WEIGHT * merchantSimilarity(extracted.merchantNormalized, candidate.merchant_normalized || '') +
+    MERCHANT_WEIGHT * merchantSimilarity(extracted.merchantNormalized || '', candidate.merchant_normalized || '') +
     DATE_WEIGHT * dateProximity(extracted.transactionDate, candidate.transaction_date);
   // Rounded so the exact-threshold case (merchant 1, date 0 => 0.6) isn't lost to float error.
   return Math.round(score * 1e6) / 1e6;
@@ -66,15 +66,17 @@ function scoreMatch({ extracted, candidate }) {
 
 // The amount-differs case (typically a tip, tax or fee added between receipt and statement).
 // Signed amounts: debits are negative, so compare magnitudes but require the same sign.
+// Note: the ADJUSTMENT_MAX_RATIO (1.4 == 14/10) is applied using integer cents to avoid float errors.
 function amountInAdjustmentRange(candidateAmount, statementAmount) {
   const candidate = Number(candidateAmount);
   const statement = Number(statementAmount);
   if (candidate === 0 || statement === 0 || Math.sign(candidate) !== Math.sign(statement)) {
     return false;
   }
-  const c = Math.abs(candidate);
-  const s = Math.abs(statement);
-  return s > c && s <= c * ADJUSTMENT_MAX_RATIO;
+  // Convert to integer cents to avoid float comparison errors (e.g., 3*1.4 = 4.199999999999999)
+  const c = Math.round(Math.abs(candidate) * 100);
+  const s = Math.round(Math.abs(statement) * 100);
+  return s > c && s * 10 <= c * 14;
 }
 
 module.exports = {

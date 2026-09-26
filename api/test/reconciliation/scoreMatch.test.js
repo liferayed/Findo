@@ -64,4 +64,27 @@ describe('amountInAdjustmentRange', () => {
     expect(amountInAdjustmentRange('-42.00', -50.4)).toBe(true);
   });
   test('zero is out of range', () => expect(amountInAdjustmentRange(0, -5)).toBe(false));
+  test('float error: -3 to -4.2 (exactly 1.4x) should be in range', () => {
+    expect(amountInAdjustmentRange(-3, -4.2)).toBe(true);
+  });
+  test('float error: -7 to -9.8 (exactly 1.4x) should be in range', () => {
+    expect(amountInAdjustmentRange(-7, -9.8)).toBe(true);
+  });
+  test('float error: -0.1 to -0.14 (exactly 1.4x) should be in range', () => {
+    expect(amountInAdjustmentRange(-0.1, -0.14)).toBe(true);
+  });
+  test('float error: -42 to -58.8 (exactly 1.4x) should be in range', () => {
+    expect(amountInAdjustmentRange(-42, -58.8)).toBe(true);
+  });
+  test('float error: -29.99 to -41.99 (above 1.4x) should be out of range', () => {
+    expect(amountInAdjustmentRange(-29.99, -41.99)).toBe(false);
+  });
+});
+
+describe('scoreMerchantAndDate', () => {
+  test('does not throw when extracted.merchantNormalized is undefined', () => {
+    const extracted = { merchantNormalized: undefined, transactionDate: '2026-01-14' };
+    const candidate = { transaction_date: '2026-01-14', merchant_normalized: 'target' };
+    expect(() => scoreMerchantAndDate({ extracted, candidate })).not.toThrow();
+  });
 });
