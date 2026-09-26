@@ -120,7 +120,19 @@ describe('reconciliation service (against real Postgres)', () => {
       const result = await findMatch(pool, statementRow({ amount: -50.4 }));
       expect(result.kind).toBe('possible');
       expect(result.candidate.id).toBe(t.id);
-      expect(result.difference).toBeCloseTo(-8.4);
+      expect(result.difference).toBe(-8.4);
+    });
+
+    test('a positive (credit) statement amount does not match a negative candidate as possible', async () => {
+      await seed({ amount: 42 });
+      expect((await findMatch(pool, statementRow({ amount: 50.4 }))).kind).toBe('new');
+    });
+
+    test('excludeIds: null is treated as no exclusions', async () => {
+      const t = await seed();
+      const result = await findMatch(pool, statementRow({ excludeIds: null }));
+      expect(result.kind).toBe('corroborate');
+      expect(result.candidate.id).toBe(t.id);
     });
 
     test('statement lower than the receipt is not a possible match', async () => {
@@ -177,6 +189,26 @@ describe('reconciliation service (against real Postgres)', () => {
       expect(sources[0].adjustment_reason).toBeNull();
       expect(await balanceOf(account.id)).toBe(balanceBefore);
     });
+
+    test('rejects an already-confirmed transaction and writes no source row', async () => {
+      const t = await seed({ reconciliationStatus: 'confirmed' });
+      const sharedItemId = await makeSharedItem(userId);
+      await expect(
+        applyCorroboration(pool, { transactionId: t.id, sharedItemId, postedDate: '2026-01-14', confidence: 0.84 })
+      ).rejects.toThrow(ValidationError);
+      const { rows } = await pool.query('SELECT 1 FROM transaction_sources WHERE transaction_id = $1', [t.id]);
+      expect(rows).toHaveLength(0);
+    });
+
+    test('a second corroboration of the same transaction throws and leaves one source row', async () => {
+      const t = await seed();
+      const sharedItemId = await makeSharedItem(userId);
+      const a = { transactionId: t.id, sharedItemId, postedDate: '2026-01-14', confidence: 0.84 };
+      await applyCorroboration(pool, a);
+      await expect(applyCorroboration(pool, a)).rejects.toThrow(ValidationError);
+      const { rows } = await pool.query('SELECT 1 FROM transaction_sources WHERE transaction_id = $1', [t.id]);
+      expect(rows).toHaveLength(1);
+    });
   });
 
   describe('applyAmountCorroboration', () => {
@@ -198,6 +230,8 @@ describe('reconciliation service (against real Postgres)', () => {
       expect(Number(after.original_amount)).toBe(-42);
       expect(after.reconciliation_status).toBe('confirmed');
       expect(await balanceOf(account.id)).toBeCloseTo(-50.4);
+      const { rows: [posted] } = await pool.query('SELECT posted_date FROM transactions WHERE id = $1', [t.id]);
+      expect(posted.posted_date).not.toBeNull();
 
       const { rows: [source] } = await pool.query(
         'SELECT role, adjustment_reason, adjustment_note FROM transaction_sources WHERE transaction_id = $1', [t.id]);
@@ -206,12 +240,42 @@ describe('reconciliation service (against real Postgres)', () => {
       expect(source.adjustment_note).toBeNull();
     });
 
+    test.each([[42, -50.4, '-50.4'], [42, -48.23, '-48.23']])(
+      'ledger stays exact to the cent: receipt %s, statement %s',
+      async (receipt, statement, expected) => {
+        const t = await seed({ amount: receipt });
+        const sharedItemId = await makeSharedItem(userId);
+        await applyAmountCorroboration(pool, args(t, sharedItemId, { statementAmount: statement }));
+        const { rows: [acc] } = await pool.query(
+          `SELECT current_balance::text AS bal,
+                  current_balance = opening_balance + (SELECT SUM(amount) FROM transactions WHERE account_id = $1) AS consistent
+           FROM accounts WHERE id = $1`, [account.id]);
+        expect(acc.bal).toBe(expected);
+        expect(acc.consistent).toBe(true);
+      }
+    );
+
+    test('keeps a pre-existing original_amount', async () => {
+      const t = await seed({ amount: 42 });
+      await pool.query('UPDATE transactions SET original_amount = -40 WHERE id = $1', [t.id]);
+      const sharedItemId = await makeSharedItem(userId);
+      await applyAmountCorroboration(pool, args(t, sharedItemId));
+      const { rows: [after] } = await pool.query('SELECT original_amount FROM transactions WHERE id = $1', [t.id]);
+      expect(Number(after.original_amount)).toBe(-40);
+    });
+
     test('other requires a note; a note is stored when given', async () => {
       const t = await seed({ amount: 42 });
       const sharedItemId = await makeSharedItem(userId);
       await expect(
         applyAmountCorroboration(pool, args(t, sharedItemId, { adjustmentReason: 'other', adjustmentNote: '  ' }))
       ).rejects.toThrow(ValidationError);
+      expect(await balanceOf(account.id)).toBe(-42);
+      const { rows: [st] } = await pool.query('SELECT amount, reconciliation_status FROM transactions WHERE id = $1', [t.id]);
+      expect(Number(st.amount)).toBe(-42);
+      expect(st.reconciliation_status).toBe('unconfirmed');
+      const { rows: srcs } = await pool.query('SELECT 1 FROM transaction_sources WHERE transaction_id = $1', [t.id]);
+      expect(srcs).toHaveLength(0);
       await applyAmountCorroboration(pool, args(t, sharedItemId, { adjustmentReason: 'other', adjustmentNote: 'valet parking' }));
       const { rows: [source] } = await pool.query('SELECT adjustment_note FROM transaction_sources WHERE transaction_id = $1', [t.id]);
       expect(source.adjustment_note).toBe('valet parking');
@@ -224,6 +288,11 @@ describe('reconciliation service (against real Postgres)', () => {
         applyAmountCorroboration(pool, args(t, sharedItemId, { adjustmentReason: 'bribe' }))
       ).rejects.toThrow(ValidationError);
       expect(await balanceOf(account.id)).toBe(-42);
+      const { rows: [st] } = await pool.query('SELECT amount, reconciliation_status FROM transactions WHERE id = $1', [t.id]);
+      expect(Number(st.amount)).toBe(-42);
+      expect(st.reconciliation_status).toBe('unconfirmed');
+      const { rows: srcs } = await pool.query('SELECT 1 FROM transaction_sources WHERE transaction_id = $1', [t.id]);
+      expect(srcs).toHaveLength(0);
     });
 
     test('rejects a transaction that is already confirmed', async () => {

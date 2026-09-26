@@ -22,14 +22,14 @@ function classify(matches) {
 // with a different amount (tip/tax/fee — `possible`), is ambiguous, or is new. Read-only:
 // writing is the apply* functions' job, so F1.7 can show the outcome in bulk-review before
 // anything is committed. Exact-amount matches always take priority over `possible` ones.
-async function findMatch(client, { accountId, transactionDate, amount, merchantRaw, excludeIds = [] }) {
+async function findMatch(client, { accountId, transactionDate, amount, merchantRaw, excludeIds }) {
   const { rows } = await client.query(
     `SELECT id, account_id, transaction_date, amount, merchant_raw, merchant_normalized, reconciliation_status
      FROM transactions
      WHERE account_id = $1
        AND transaction_date BETWEEN ($2::date - $3::int) AND ($2::date + $3::int)
        AND NOT (id = ANY($4::uuid[]))`,
-    [accountId, transactionDate, WINDOW_DAYS, excludeIds]
+    [accountId, transactionDate, WINDOW_DAYS, excludeIds || []]
   );
 
   const extracted = { amount, transactionDate, merchantNormalized: normalizeMerchant(merchantRaw) };
@@ -61,16 +61,20 @@ async function findMatch(client, { accountId, transactionDate, amount, merchantR
     kind: 'possible',
     candidate: possibleResult.candidate,
     confidence: possibleResult.confidence,
-    difference: Number(amount) - Number(possibleResult.candidate.amount),
+    difference: (Math.round(Number(amount) * 100) - Math.round(Number(possibleResult.candidate.amount) * 100)) / 100,
   };
 }
 
 // Exact-amount corroboration. Never touches amount, so it never touches the running balance.
 async function applyCorroboration(client, { transactionId, sharedItemId, postedDate, confidence }) {
-  await client.query(
-    `UPDATE transactions SET reconciliation_status = 'confirmed', posted_date = $2 WHERE id = $1`,
+  const { rowCount } = await client.query(
+    `UPDATE transactions SET reconciliation_status = 'confirmed', posted_date = $2
+     WHERE id = $1 AND reconciliation_status = 'unconfirmed'`,
     [transactionId, postedDate]
   );
+  if (rowCount === 0) {
+    throw new ValidationError(['only an unconfirmed transaction can be corroborated']);
+  }
   await client.query(
     `INSERT INTO transaction_sources (transaction_id, shared_item_id, role, matched_at, match_confidence)
      VALUES ($1, $2, 'corroboration', now(), $3)`,
@@ -81,7 +85,8 @@ async function applyCorroboration(client, { transactionId, sharedItemId, postedD
 // Amount-differs corroboration: the statement is authoritative for the amount (CP-004's ledger
 // follows it), the old amount is preserved in original_amount, and the user's tag for the
 // difference is stored on the provenance row. Runs on the caller's client so F1.7 can wrap it
-// in its confirm transaction; validation happens before any write.
+// in its confirm transaction; validation happens before any write. The caller MUST run this inside
+// BEGIN/COMMIT: the FOR UPDATE lock and the atomicity of the writes only hold inside a transaction.
 async function applyAmountCorroboration(
   client,
   { transactionId, sharedItemId, postedDate, statementAmount, confidence, adjustmentReason, adjustmentNote }
@@ -101,7 +106,10 @@ async function applyAmountCorroboration(
     throw new ValidationError(['only an unconfirmed transaction can be corroborated with an amount change']);
   }
   const { account_id: accountId, amount: oldAmount } = rows[0];
-  const difference = Number(statementAmount) - Number(oldAmount);
+  // Subtract in SQL on numeric values: JS floats would give e.g. -8.399999999999999.
+  const { rows: [{ difference }] } = await client.query(
+    'SELECT ($1::numeric - $2::numeric) AS difference', [statementAmount, oldAmount]
+  );
 
   await client.query(
     `UPDATE transactions
