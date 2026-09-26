@@ -1,9 +1,9 @@
 const { pool } = require('../../src/db');
 const { createAccountsService } = require('../../src/accounts/accountsService');
 const { getBalanceAsOf } = require('../../src/accounts/balance');
+const { createTransactionsService } = require('../../src/transactions/transactionsService');
 
 const accountsService = createAccountsService({ pool });
-const { createTransactionsService } = require('../../src/transactions/transactionsService');
 const transactionsService = createTransactionsService({ pool });
 
 async function balanceOf(accountId) {
@@ -92,7 +92,10 @@ describe('balance ledger (against real Postgres)', () => {
 
   test('if the balance update fails, no transaction row is left behind (self-owned transaction)', async () => {
     // Force the UPDATE to fail after the INSERT succeeds, using a real constraint.
-    await pool.query('ALTER TABLE accounts ADD CONSTRAINT tmp_ledger_floor CHECK (current_balance >= -1000)');
+    const constraint = `tmp_ledger_floor_${Date.now()}`;
+    await pool.query(
+      `ALTER TABLE accounts ADD CONSTRAINT ${constraint} CHECK (id <> '${account.id}'::uuid OR current_balance >= -1000) NOT VALID`
+    );
     try {
       await expect(
         transactionsService.createTransaction(userId, {
@@ -100,7 +103,7 @@ describe('balance ledger (against real Postgres)', () => {
         })
       ).rejects.toThrow();
     } finally {
-      await pool.query('ALTER TABLE accounts DROP CONSTRAINT tmp_ledger_floor');
+      await pool.query(`ALTER TABLE accounts DROP CONSTRAINT ${constraint}`);
     }
     expect(await balanceOf(account.id)).toBe(0);
     expect(await countTransactions(account.id)).toBe(0);
