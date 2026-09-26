@@ -1,10 +1,13 @@
 const { pool } = require('../../src/db');
+const { createAccountsService } = require('../../src/accounts/accountsService');
+const { upsertCreditCardDetails } = require('../../src/accounts/creditCardDetailsService');
+const { ValidationError } = require('../../src/errors');
+
+afterAll(async () => {
+  await pool.end();
+});
 
 describe('schema for CP-005 / CP-006 (against real Postgres)', () => {
-  afterAll(async () => {
-    await pool.end();
-  });
-
   async function columnsOf(table) {
     const { rows } = await pool.query(
       'SELECT column_name FROM information_schema.columns WHERE table_name = $1',
@@ -49,5 +52,57 @@ describe('schema for CP-005 / CP-006 (against real Postgres)', () => {
         'minimum_payment', 'statement_closing_day', 'annual_fee',
       ])
     );
+  });
+});
+
+describe('upsertCreditCardDetails (against real Postgres)', () => {
+  const accountsService = createAccountsService({ pool });
+  let userId;
+  let card;
+
+  beforeEach(async () => {
+    const { rows } = await pool.query(`INSERT INTO users (email, name) VALUES ($1, 'T') RETURNING id`, [
+      `card-${Date.now()}-${Math.random()}@findo.test`,
+    ]);
+    userId = rows[0].id;
+    card = await accountsService.createAccount(userId, { nickname: 'Sapphire', type: 'credit_card', institution_name: 'Chase' });
+  });
+
+  afterEach(async () => {
+    await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+  });
+
+  test('first write creates the row with the given fields', async () => {
+    const row = await upsertCreditCardDetails(pool, card.id, { due_date: '2026-02-10', minimum_payment: 35 });
+    expect(Number(row.minimum_payment)).toBe(35);
+    expect(row.issuer).toBeNull();
+  });
+
+  test('a second statement overwrites non-null fields and preserves the rest', async () => {
+    await upsertCreditCardDetails(pool, card.id, { minimum_payment: 35, credit_limit: 5000, issuer: 'Chase' });
+    const row = await upsertCreditCardDetails(pool, card.id, { minimum_payment: 42, credit_limit: null });
+    expect(Number(row.minimum_payment)).toBe(42);
+    expect(Number(row.credit_limit)).toBe(5000);
+    expect(row.issuer).toBe('Chase');
+  });
+
+  test('rejects a non-credit-card account', async () => {
+    const checking = await accountsService.createAccount(userId, { nickname: 'Chk', type: 'checking', institution_name: 'Chase' });
+    await expect(upsertCreditCardDetails(pool, checking.id, { apr: 19.99 })).rejects.toThrow(ValidationError);
+  });
+
+  test('rejects an unknown field', async () => {
+    await expect(upsertCreditCardDetails(pool, card.id, { bogus: 1 })).rejects.toThrow(ValidationError);
+  });
+
+  test('empty fields creates an all-null row on a new card and leaves an existing row unchanged', async () => {
+    const created = await upsertCreditCardDetails(pool, card.id, {});
+    for (const f of ['issuer', 'credit_limit', 'apr', 'due_date', 'minimum_payment', 'statement_closing_day', 'annual_fee']) {
+      expect(created[f]).toBeNull();
+    }
+    await upsertCreditCardDetails(pool, card.id, { issuer: 'Chase', apr: 19.99 });
+    const row = await upsertCreditCardDetails(pool, card.id, {});
+    expect(row.issuer).toBe('Chase');
+    expect(Number(row.apr)).toBe(19.99);
   });
 });
