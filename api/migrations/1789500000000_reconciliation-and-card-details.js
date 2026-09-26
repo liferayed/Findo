@@ -1,6 +1,6 @@
 exports.shorthands = undefined;
 
-exports.up = (pgm) => {
+exports.up = async (pgm) => {
   pgm.createType('adjustment_reason', ['tip', 'tax', 'fee', 'other']);
 
   // CP-005: F1.7 is the first writer of corroboration rows, so the two columns the schema doc
@@ -28,6 +28,15 @@ exports.up = (pgm) => {
     statement_closing_day: { type: 'integer' },
     annual_fee: { type: 'numeric' },
   });
+
+  const { normalizeMerchant } = require('../src/transactions/normalizeMerchant');
+  const { rows } = await pgm.db.query('SELECT id, merchant_raw FROM transactions WHERE merchant_normalized IS NULL');
+  for (const row of rows) {
+    await pgm.db.query('UPDATE transactions SET merchant_normalized = $1 WHERE id = $2', [
+      normalizeMerchant(row.merchant_raw),
+      row.id,
+    ]);
+  }
 };
 
 exports.down = (pgm) => {

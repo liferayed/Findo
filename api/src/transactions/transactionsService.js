@@ -1,4 +1,5 @@
 const { validateTransactionInput } = require('./validateTransactionInput');
+const { normalizeMerchant } = require('./normalizeMerchant');
 const { applyTransactionToBalance } = require('../accounts/balance');
 const { ValidationError, NotFoundError } = require('../errors');
 
@@ -41,10 +42,10 @@ function createTransactionsService({ pool }) {
   // is what gets stored in transactions.amount and added to current_balance.
   async function insertTransaction(client, { accountId, transactionDate, signedAmount, merchantRaw, type, isManual, reconciliationStatus }) {
     const { rows } = await client.query(
-      `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, type, is_manual, reconciliation_status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, merchant_normalized, type, is_manual, reconciliation_status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING ${TRANSACTION_COLUMNS}`,
-      [accountId, transactionDate, signedAmount, merchantRaw, type, isManual, reconciliationStatus]
+      [accountId, transactionDate, signedAmount, merchantRaw, normalizeMerchant(merchantRaw), type, isManual, reconciliationStatus]
     );
     await applyTransactionToBalance(client, accountId, signedAmount);
     return rows[0];
