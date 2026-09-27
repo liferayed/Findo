@@ -99,4 +99,101 @@ async function extractReceipt(imageBase64, { timeoutMs = EXTRACTION_TIMEOUT_MS }
   return Promise.race([call, timeout]);
 }
 
-module.exports = { extractReceipt, PROMPT_TEMPLATE, RESPONSE_SCHEMA, EXTRACTION_TIMEOUT_MS };
+// Statements need a higher context window than F1.6's cropped receipt photos — the brainstorm
+// spike found a single 200-DPI full statement page overflowed Ollama's default 4096-token
+// context. 60s (vs. receipt's 30s) reflects the spike's ~50-85s/page observation.
+const STATEMENT_EXTRACTION_TIMEOUT_MS = 60000;
+
+const STATEMENT_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    transactions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          date: { type: 'string' },
+          description: { type: 'string' },
+          amount: { type: 'number' },
+        },
+        required: ['date', 'description', 'amount'],
+      },
+    },
+    beginning_balance: { type: ['number', 'null'] },
+    ending_balance: { type: ['number', 'null'] },
+    institution_name: { type: ['string', 'null'] },
+    account_type_text: { type: ['string', 'null'] },
+    last_four: { type: ['string', 'null'] },
+    credit_card: {
+      type: ['object', 'null'],
+      properties: {
+        due_date: { type: ['string', 'null'] },
+        minimum_payment: { type: ['number', 'null'] },
+        issuer: { type: ['string', 'null'] },
+        credit_limit: { type: ['number', 'null'] },
+        apr: { type: ['number', 'null'] },
+      },
+    },
+  },
+  required: ['transactions', 'beginning_balance', 'ending_balance'],
+};
+
+function statementPromptFor(isFirstPage) {
+  const headerFields = isFirstPage
+    ? ` Also extract, from this first page only: institution_name (the bank/card issuer's name as printed), account_type_text (e.g. "Total Checking", "Platinum Card"), last_four (the last 4 digits of the account/card number, as a 4-character string), and credit_card (an object with due_date, minimum_payment, issuer, credit_limit, apr — each null if this is not a credit card statement or the field isn't printed).`
+    : '';
+  return `Extract every transaction row from this bank/card statement page image. Respond with ONLY a JSON object, no other text.
+
+Schema:
+{"transactions": [{"date": string, "description": string, "amount": number}], "beginning_balance": number or null, "ending_balance": number or null}
+
+Rules:
+- transactions: every row in the transaction table on this page, in order. date as YYYY-MM-DD. amount signed (debit negative, credit positive).
+- beginning_balance/ending_balance: only if this exact page prints them (many continuation pages don't) — null if not printed on THIS page. Never estimate or infer one.${headerFields}`;
+}
+
+/**
+ * Calls the local Ollama vision model to extract one statement page's transactions and
+ * (first page only) header fields. Same shape as extractReceipt, but with the higher context
+ * window and longer timeout statements need (see the F1.7 brainstorm's spike). Resolves with
+ * the raw parsed JSON (untrusted — callers validate via documents/validateStatementExtraction.js).
+ */
+async function extractStatementPage(imageBase64, { isFirstPage = false, timeoutMs = STATEMENT_EXTRACTION_TIMEOUT_MS } = {}) {
+  const timeout = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(`ollama vision statement extraction timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+
+  const call = (async () => {
+    const res = await fetch(`${config.ollamaBaseUrl}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: config.ollamaVisionModel,
+        prompt: statementPromptFor(isFirstPage),
+        images: [imageBase64],
+        format: STATEMENT_RESPONSE_SCHEMA,
+        stream: false,
+        options: { temperature: 0, num_ctx: 8192 },
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`ollama vision statement request failed with HTTP ${res.status}`);
+    }
+
+    const body = await res.json();
+    return parseModelJson(body.response, 'ollama vision statement');
+  })();
+
+  return Promise.race([call, timeout]);
+}
+
+module.exports = {
+  extractReceipt,
+  extractStatementPage,
+  PROMPT_TEMPLATE,
+  RESPONSE_SCHEMA,
+  EXTRACTION_TIMEOUT_MS,
+  STATEMENT_RESPONSE_SCHEMA,
+  STATEMENT_EXTRACTION_TIMEOUT_MS,
+};

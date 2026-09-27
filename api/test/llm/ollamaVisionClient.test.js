@@ -5,7 +5,7 @@
 // the schema, so a future edit can't silently regress without a fast, deterministic test
 // catching it (rather than relying on the real, sometimes non-deterministic model to happen to
 // reproduce the bug).
-const { extractReceipt, RESPONSE_SCHEMA } = require('../../src/llm/ollamaVisionClient');
+const { extractReceipt, extractStatementPage, RESPONSE_SCHEMA } = require('../../src/llm/ollamaVisionClient');
 
 describe('extractReceipt request contract', () => {
   const realFetch = global.fetch;
@@ -46,5 +46,34 @@ describe('extractReceipt request contract', () => {
     expect(body.format).toEqual(RESPONSE_SCHEMA);
     expect(RESPONSE_SCHEMA.properties.card_last_four).toEqual({ type: ['string', 'null'] });
     expect(RESPONSE_SCHEMA.required).toContain('card_last_four');
+  });
+});
+
+describe('extractStatementPage', () => {
+  const realFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  test('sends num_ctx: 8192 and the first-page prompt includes header fields', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ response: JSON.stringify({ transactions: [], beginning_balance: null, ending_balance: null }) }),
+    });
+    await extractStatementPage('base64', { isFirstPage: true });
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.options.num_ctx).toBe(8192);
+    expect(body.prompt).toContain('institution_name');
+  });
+
+  test('omits header-field instructions on later pages', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ response: JSON.stringify({ transactions: [], beginning_balance: null, ending_balance: null }) }),
+    });
+    await extractStatementPage('base64', { isFirstPage: false });
+    const body = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(body.prompt).not.toContain('institution_name');
   });
 });
