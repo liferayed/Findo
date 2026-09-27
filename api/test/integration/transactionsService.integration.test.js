@@ -41,6 +41,17 @@ describe('transactionsService (against real Postgres)', () => {
     await pool.end();
   });
 
+  test('createTransaction stores merchant_normalized', async () => {
+    const transaction = await service.createTransaction(userId, {
+      account_id: accountId,
+      transaction_date: '2026-01-15',
+      amount: 9,
+      type: 'debit',
+      merchant_raw: "Trader Joe's #204",
+    });
+    expect(transaction.merchant_normalized).toBe('trader joe s');
+  });
+
   test('createTransaction inserts a row with server-shaped fields', async () => {
     const transaction = await service.createTransaction(userId, {
       account_id: accountId,
