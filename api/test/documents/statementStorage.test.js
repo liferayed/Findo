@@ -1,5 +1,10 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
+const childProcess = require('node:child_process');
+
+jest.mock('node:child_process');
+
 const { saveStatementFile, renderPagesToImages, deleteStatementFileQuietly, UPLOAD_DIR } = require('../../src/documents/statementStorage');
 
 function fakeFile(overrides = {}) {
@@ -29,5 +34,100 @@ describe('statementStorage', () => {
 
   test('deleteStatementFileQuietly on undefined does not throw', async () => {
     await expect(deleteStatementFileQuietly(undefined)).resolves.toBeUndefined();
+  });
+
+  describe('renderPagesToImages on a PDF (mocked pdftoppm, no real binary required)', () => {
+    afterEach(() => {
+      childProcess.execFile.mockReset();
+    });
+
+    test('calls execFile with pdftoppm, -png, -r 200, the absolute source path, and an output prefix', async () => {
+      const fileRef = await saveStatementFile(fakeFile({ mimetype: 'application/pdf' }));
+      const absolutePath = path.join(UPLOAD_DIR, path.basename(fileRef));
+      let capturedPrefix;
+
+      childProcess.execFile.mockImplementation((file, args, callback) => {
+        capturedPrefix = args[args.length - 1];
+        callback(null, { stdout: '', stderr: '' });
+      });
+
+      try {
+        await renderPagesToImages(fileRef);
+      } catch {
+        // The mock writes no files, so reading the temp dir afterwards may reject; that's fine —
+        // this test only cares about how execFile was invoked.
+      }
+
+      expect(childProcess.execFile).toHaveBeenCalledTimes(1);
+      const [command, args] = childProcess.execFile.mock.calls[0];
+      expect(command).toBe('pdftoppm');
+      expect(args).toEqual(['-png', '-r', '200', absolutePath, expect.any(String)]);
+      expect(args).toContain('-png');
+      expect(args).toContain('-r');
+      expect(args).toContain('200');
+      expect(path.isAbsolute(capturedPrefix)).toBe(true);
+      expect(path.dirname(capturedPrefix)).not.toBe(UPLOAD_DIR);
+
+      await deleteStatementFileQuietly(fileRef);
+    });
+
+    test('returns pages in numeric filename order (page-1 before page-2)', async () => {
+      const fileRef = await saveStatementFile(fakeFile({ mimetype: 'application/pdf' }));
+
+      childProcess.execFile.mockImplementation(async (file, args, callback) => {
+        const prefix = args[args.length - 1];
+        const dir = path.dirname(prefix);
+        await fs.writeFile(path.join(dir, 'page-2.png'), 'second-page');
+        await fs.writeFile(path.join(dir, 'page-1.png'), 'first-page');
+        callback(null, { stdout: '', stderr: '' });
+      });
+
+      const pages = await renderPagesToImages(fileRef);
+
+      expect(pages).toHaveLength(2);
+      expect(Buffer.from(pages[0], 'base64').toString()).toBe('first-page');
+      expect(Buffer.from(pages[1], 'base64').toString()).toBe('second-page');
+
+      await deleteStatementFileQuietly(fileRef);
+    });
+
+    test('sorts numerically rather than lexicographically (page-2 before page-10)', async () => {
+      const fileRef = await saveStatementFile(fakeFile({ mimetype: 'application/pdf' }));
+
+      childProcess.execFile.mockImplementation(async (file, args, callback) => {
+        const prefix = args[args.length - 1];
+        const dir = path.dirname(prefix);
+        await fs.writeFile(path.join(dir, 'page-10.png'), 'page-ten');
+        await fs.writeFile(path.join(dir, 'page-2.png'), 'page-two');
+        callback(null, { stdout: '', stderr: '' });
+      });
+
+      const pages = await renderPagesToImages(fileRef);
+
+      expect(pages).toHaveLength(2);
+      expect(Buffer.from(pages[0], 'base64').toString()).toBe('page-two');
+      expect(Buffer.from(pages[1], 'base64').toString()).toBe('page-ten');
+
+      await deleteStatementFileQuietly(fileRef);
+    });
+
+    test('removes the temp render directory after a successful render', async () => {
+      const fileRef = await saveStatementFile(fakeFile({ mimetype: 'application/pdf' }));
+      let capturedDir;
+
+      childProcess.execFile.mockImplementation(async (file, args, callback) => {
+        const prefix = args[args.length - 1];
+        capturedDir = path.dirname(prefix);
+        await fs.writeFile(path.join(capturedDir, 'page-1.png'), 'only-page');
+        callback(null, { stdout: '', stderr: '' });
+      });
+
+      await renderPagesToImages(fileRef);
+
+      expect(capturedDir).toBeDefined();
+      expect(fsSync.existsSync(capturedDir)).toBe(false);
+
+      await deleteStatementFileQuietly(fileRef);
+    });
   });
 });
