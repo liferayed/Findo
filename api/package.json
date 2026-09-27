@@ -24,7 +24,7 @@
     "dotenv": "^18.0.3",
     "express": "^5.2.1",
     "ioredis": "^6.0.0",
-    "multer": "^2.3.0",
+    "multer": "^2.4.0",
     "node-pg-migrate": "^9.0.0",
     "pg": "^8.12.0"
   },
