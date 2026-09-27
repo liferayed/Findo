@@ -46,8 +46,31 @@ describe('normalizeStatementPageExtraction', () => {
     expect(result.creditCard).toEqual({ due_date: '2026-02-10', minimum_payment: 35, issuer: null, credit_limit: null, apr: null });
   });
 
+  test('legitimate zero values in credit_card fields are preserved, not treated as absent', () => {
+    const raw = { transactions: [], credit_card: { due_date: null, minimum_payment: 0, issuer: null, credit_limit: null, apr: 0 } };
+    const result = normalizeStatementPageExtraction(raw, { isFirstPage: true });
+    expect(result.creditCard).toEqual({ due_date: null, minimum_payment: 0, issuer: null, credit_limit: null, apr: 0 });
+  });
+
+  test('a negative credit_card numeric value is invalid and normalizes to null', () => {
+    const raw = { transactions: [], credit_card: { due_date: null, minimum_payment: null, issuer: null, credit_limit: null, apr: -5 } };
+    const result = normalizeStatementPageExtraction(raw, { isFirstPage: true });
+    expect(result.creditCard.apr).toBeNull();
+  });
+
   test('a last_four that is not exactly 4 digits is discarded', () => {
     const result = normalizeStatementPageExtraction({ transactions: [], last_four: 'CARD' }, { isFirstPage: true });
     expect(result.lastFour).toBeNull();
+  });
+
+  test('a due_date with surrounding whitespace is trimmed before validation and storage', () => {
+    const raw = { transactions: [], credit_card: { due_date: ' 2026-02-10 ', minimum_payment: null, issuer: null, credit_limit: null, apr: null } };
+    const result = normalizeStatementPageExtraction(raw, { isFirstPage: true });
+    expect(result.creditCard.due_date).toBe('2026-02-10');
+  });
+
+  test('a last_four provided as a number is normalized to a string', () => {
+    const result = normalizeStatementPageExtraction({ transactions: [], last_four: 4432 }, { isFirstPage: true });
+    expect(result.lastFour).toBe('4432');
   });
 });

@@ -1,4 +1,3 @@
-const { coerceToPositiveNumber } = require('../llm/coerceToPositiveNumber');
 const { isValidCalendarDate } = require('../transactions/validateTransactionInput');
 
 function coerceToNumber(value) {
@@ -8,6 +7,14 @@ function coerceToNumber(value) {
 
 function coerceToNullableString(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+}
+
+// Unlike coerceToPositiveNumber (still used by receipts, where a total is always positive),
+// credit-card fields such as a 0% promotional APR or a $0 minimum payment due are legitimate
+// zero values, not absent data. Only negative/non-finite/non-numeric values normalize to null.
+function coerceToNullableNumber(value) {
+  const num = typeof value === 'string' ? Number(value) : value;
+  return typeof num === 'number' && Number.isFinite(num) && num >= 0 ? num : null;
 }
 
 function normalizeTransactionRow(row) {
@@ -27,12 +34,13 @@ function normalizeCreditCardFields(raw) {
   if (!raw || typeof raw !== 'object') {
     return null;
   }
+  const dueDate = coerceToNullableString(raw.due_date);
   return {
-    due_date: coerceToNullableString(raw.due_date) && isValidCalendarDate(raw.due_date) ? raw.due_date : null,
-    minimum_payment: coerceToPositiveNumber(raw.minimum_payment),
+    due_date: dueDate && isValidCalendarDate(dueDate) ? dueDate : null,
+    minimum_payment: coerceToNullableNumber(raw.minimum_payment),
     issuer: coerceToNullableString(raw.issuer),
-    credit_limit: coerceToPositiveNumber(raw.credit_limit),
-    apr: coerceToPositiveNumber(raw.apr),
+    credit_limit: coerceToNullableNumber(raw.credit_limit),
+    apr: coerceToNullableNumber(raw.apr),
   };
 }
 
@@ -52,7 +60,10 @@ function normalizeStatementPageExtraction(raw, { isFirstPage } = {}) {
     endingBalance: coerceToNumber(source.ending_balance),
     institutionName: isFirstPage ? coerceToNullableString(source.institution_name) : null,
     accountTypeText: isFirstPage ? coerceToNullableString(source.account_type_text) : null,
-    lastFour: isFirstPage && /^\d{4}$/.test(source.last_four || '') ? source.last_four : null,
+    lastFour: (() => {
+      const lastFourStr = typeof source.last_four === 'string' ? source.last_four : String(source.last_four ?? '');
+      return isFirstPage && /^\d{4}$/.test(lastFourStr) ? lastFourStr : null;
+    })(),
     creditCard: isFirstPage ? normalizeCreditCardFields(source.credit_card) : null,
   };
 }
