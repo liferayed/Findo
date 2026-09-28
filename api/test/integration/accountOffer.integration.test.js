@@ -1,8 +1,12 @@
 const { pool } = require('../../src/db');
 const { createAccountOfferService } = require('../../src/documents/accountOfferService');
+const { createAccountsService } = require('../../src/accounts/accountsService');
+const { createInstitutionsService } = require('../../src/institutions/institutionsService');
 const { ValidationError } = require('../../src/errors');
 
-const service = createAccountOfferService({ pool, accountsService: require('../../src/accounts/accountsService').createAccountsService({ pool }), institutionsService: require('../../src/institutions/institutionsService').createInstitutionsService({ pool }) });
+const accountsService = createAccountsService({ pool });
+const institutionsService = createInstitutionsService({ pool });
+const service = createAccountOfferService({ pool, accountsService, institutionsService });
 
 async function createTestUser(email) {
   const { rows } = await pool.query(`INSERT INTO users (email, name) VALUES ($1, 'T') RETURNING id`, [email]);
@@ -74,6 +78,45 @@ describe('account offer service (against real Postgres)', () => {
     expect(row.parse_status).toBe('needs_clarification'); // still pending, not stuck in a dead end
     expect(row.extracted_data.accountOfferDeclined).toBe(false);
     expect(row.extracted_data.resolvedAccountId).toBeNull();
+  });
+
+  // F1.7 final review M1: createAccount used to write via `pool`, its own connection — separate
+  // from resolveAccountOffer's `client`/transaction — so the account was committed independently
+  // the instant createAccount returned, regardless of what happened afterwards. If some later
+  // step in the same call then failed, the account it had just created would be left behind as
+  // an orphan, not rolled back with the rest. createAccount now accepts an optional `client` and
+  // resolveAccountOffer passes its own, so the INSERT runs on the same transaction and rolls
+  // back with everything else. This test forces a failure right after account creation (via a
+  // wrapped accountsService) and confirms no orphan account survives the rollback.
+  test('when a later step fails after account creation, the account is rolled back too — no orphan', async () => {
+    const id = await seedNeedsClarification(userId, {
+      institutionName: 'Chase', accountTypeText: null, lastFour: '7777', creditCard: null,
+      transactions: [], resolvedAccountId: null, accountOfferDeclined: false,
+    });
+
+    const failingAccountsService = {
+      createAccount: async (uid, input, opts) => {
+        await accountsService.createAccount(uid, input, opts);
+        throw new Error('forced failure after account creation, before the offer is fully resolved');
+      },
+    };
+    const failingService = createAccountOfferService({ pool, accountsService: failingAccountsService, institutionsService });
+
+    await expect(
+      failingService.resolveAccountOffer(userId, id, { accept: true, type: 'checking', nickname: 'Orphan-Check' })
+    ).rejects.toThrow('forced failure after account creation, before the offer is fully resolved');
+
+    const { rows: [row] } = await pool.query(
+      `SELECT si.parse_status, d.extracted_data FROM shared_items si JOIN documents d ON d.shared_item_id = si.id WHERE si.id = $1`,
+      [id]
+    );
+    expect(row.parse_status).toBe('needs_clarification'); // rolled back, not left half-resolved
+    expect(row.extracted_data.resolvedAccountId).toBeNull();
+
+    const { rows: accounts } = await pool.query(
+      `SELECT * FROM accounts WHERE user_id = $1 AND nickname = 'Orphan-Check'`, [userId]
+    );
+    expect(accounts).toHaveLength(0); // the account the failed call created did not survive
   });
 
   test('getAccountOffer rejects when the statement is not in needs_clarification', async () => {

@@ -55,12 +55,18 @@ function createAccountOfferService({ pool, accountsService, institutionsService 
       const data = rows[0].extracted_data;
 
       const resolvedInstitutionName = (await institutionsService.resolveInstitutionAlias(data.institutionName)) || data.institutionName;
+      // F1.7 final review M1: createAccount used to always write via `pool`, its own connection —
+      // separate from this function's `client`/transaction — so the account was committed
+      // independently the instant this call returned, regardless of what happened afterwards in
+      // this function. Passing `client` here runs the INSERT on this same transaction, so if
+      // anything below fails and we ROLLBACK, the account creation rolls back with it instead of
+      // being left behind as an orphan.
       const account = await accountsService.createAccount(userId, {
         nickname: nickname || `${resolvedInstitutionName} ${data.accountTypeText || ''}`.trim(),
         type,
         institution_name: resolvedInstitutionName,
         last_four: data.lastFour,
-      });
+      }, { client });
       data.resolvedAccountId = account.id;
 
       await client.query(
@@ -74,8 +80,9 @@ function createAccountOfferService({ pool, accountsService, institutionsService 
       if (rowCount === 0) {
         // Another concurrent call already resolved this offer between our SELECT ... FOR
         // UPDATE and this UPDATE is not actually reachable (the row lock covers exactly that
-        // window) — this guards a future code path change, not a currently-provable race, and
-        // keeps the account creation from being committed as an orphan if it ever becomes one.
+        // window) — this guards a future code path change, not a currently-provable race. Since
+        // createAccount now runs on this same `client`, the ROLLBACK below undoes the account
+        // creation along with everything else, so this path can never leave an orphan account.
         throw new ValidationError(['this statement has no pending account offer']);
       }
 
