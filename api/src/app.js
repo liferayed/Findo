@@ -5,6 +5,9 @@ const { buildChatReply } = require('./chat/buildChatReply');
 const { looksLikeAccountCreation, parseAccountMessage } = require('./accounts/parseAccountMessage');
 const { ACCOUNT_TYPES } = require('./accounts/validateAccountInput');
 const { MAX_FILE_SIZE_BYTES, FILE_TOO_LARGE_MESSAGE } = require('./documents/validateReceiptUpload');
+const {
+  MAX_FILE_SIZE_BYTES: STATEMENT_MAX_FILE_SIZE_BYTES,
+} = require('./documents/statementUploadService');
 
 function statusCodeFor(err) {
   return err.statusCode || 500;
@@ -36,6 +39,25 @@ function uploadReceiptFile(req, res, next) {
   });
 }
 
+// Mirrors receiptUpload/uploadReceiptFile above, but for statements: images + PDF allowed
+// (statementUploadService's own ALLOWED_MIME_TYPES check is still the single source of truth
+// for which mime types are accepted — no fileFilter here, same reasoning as receiptUpload), and
+// the same "reject oversized uploads before buffering the whole body" behavior via multer's own
+// limits.fileSize, reusing statementUploadService's MAX_FILE_SIZE_BYTES.
+const statementUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: STATEMENT_MAX_FILE_SIZE_BYTES } });
+
+function uploadStatementFile(req, res, next) {
+  statementUpload.single('file')(req, res, (err) => {
+    if (!err) {
+      return next();
+    }
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ errors: ['File is too large — statements must be 10MB or smaller.'] });
+    }
+    next(err);
+  });
+}
+
 function createApp({
   checkHealth,
   accountsService,
@@ -45,6 +67,7 @@ function createApp({
   chatTransactionHandler,
   receiptUploadHandler,
   documentsService,
+  statementUploadService,
 }) {
   const app = express();
 
@@ -222,6 +245,34 @@ function createApp({
         transaction: result.transaction,
         message: result.message,
       });
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.post('/documents/statements', uploadStatementFile, async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      const result = await statementUploadService.handleStatementUpload(userId, { file: req.file });
+      res.status(202).json({ shared_item_id: result.sharedItemId });
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.get('/documents/:id/status', async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      const status = await statementUploadService.getStatementStatus(userId, req.params.id);
+      res.status(200).json(status);
     } catch (err) {
       if (err.statusCode) {
         res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
