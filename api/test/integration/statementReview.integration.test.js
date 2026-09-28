@@ -96,6 +96,12 @@ describe('statement review service (against real Postgres)', () => {
     const review = await service.buildReview(userId, id);
     expect(review.balanceMismatch).not.toBeNull();
     expect(review.balanceMismatch.gap).toBeCloseTo(10);
+    // F1.7 final review M2: reconstructedBalance must be the same (adjusted) value gap was
+    // actually computed from, so the three returned numbers stay arithmetically consistent for
+    // any caller displaying them together — this has a genuine gap AND a new row, exactly the
+    // case that used to make the two disagree.
+    expect(review.balanceMismatch.reconstructedBalance - review.balanceMismatch.statementEndingBalance)
+      .toBeCloseTo(review.balanceMismatch.gap);
   });
 
   test('balanceMismatch reports a gap when they differ', async () => {
@@ -143,6 +149,10 @@ describe('statement review service (against real Postgres)', () => {
     expect(review.rows[0].kind).toBe('possible');
     expect(review.balanceMismatch).not.toBeNull();
     expect(review.balanceMismatch.gap).toBeCloseTo(10);
+    // F1.7 final review M2: same consistency check, this time with a 'possible' row's difference
+    // folded into the adjustment instead of a 'new' row's amount.
+    expect(review.balanceMismatch.reconstructedBalance - review.balanceMismatch.statementEndingBalance)
+      .toBeCloseTo(review.balanceMismatch.gap);
   });
 
   // F1.7 final review I3 (Task 7 Minor): loadReadyRow used to throw one generic

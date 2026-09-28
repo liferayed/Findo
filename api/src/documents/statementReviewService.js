@@ -66,9 +66,16 @@ function createStatementReviewService({ pool }) {
         }
         return sum;
       }, 0);
-      const gap = Math.round((reconstructed + projectedAdjustment - Number(data.endingBalance)) * 100) / 100;
+      // F1.7 final review M2: reconstructedBalance used to be returned as the PRE-adjustment
+      // value (the ledger as it stands today), while `gap` was computed from the adjusted total
+      // that includes this statement's own new/possible rows — so a caller displaying all three
+      // numbers would see reconstructedBalance - statementEndingBalance !== gap whenever there
+      // were any new/possible rows, which looks self-contradictory. Return the same adjusted
+      // value used to compute `gap` instead, so the arithmetic is always internally consistent.
+      const adjustedReconstructed = Math.round((reconstructed + projectedAdjustment) * 100) / 100;
+      const gap = Math.round((adjustedReconstructed - Number(data.endingBalance)) * 100) / 100;
       if (gap !== 0) {
-        balanceMismatch = { statementEndingBalance: data.endingBalance, reconstructedBalance: reconstructed, gap };
+        balanceMismatch = { statementEndingBalance: data.endingBalance, reconstructedBalance: adjustedReconstructed, gap };
       }
     }
 
