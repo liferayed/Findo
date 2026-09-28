@@ -45,6 +45,10 @@ describe('statement extraction worker (against real Postgres)', () => {
     await pool.end();
   });
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   test('two-page statement aggregates transactions and picks the first/last non-null balance', async () => {
     const fileRef = await saveStatementFile({ buffer: Buffer.from('x'), mimetype: 'image/png', size: 1 });
     const sharedItemId = await insertSharedItemAndDocument(userId, fileRef);
@@ -74,8 +78,6 @@ describe('statement extraction worker (against real Postgres)', () => {
     expect(state.extracted_data.beginningBalance).toBe(100);
     expect(state.extracted_data.endingBalance).toBe(345.5);
     expect(state.extracted_data.resolvedAccountId).toBe(account.id);
-
-    jest.restoreAllMocks();
   });
 
   test('no last_four means no account resolution — parse_status becomes needs_clarification', async () => {
@@ -90,7 +92,22 @@ describe('statement extraction worker (against real Postgres)', () => {
     const state = await fetchState(sharedItemId);
     expect(state.parse_status).toBe('needs_clarification');
     expect(state.extracted_data.resolvedAccountId).toBeNull();
-    jest.restoreAllMocks();
+  });
+
+  test('last_four present but institution_name null falls through to needs_clarification', async () => {
+    const fileRef = await saveStatementFile({ buffer: Buffer.from('x'), mimetype: 'image/png', size: 1 });
+    const sharedItemId = await insertSharedItemAndDocument(userId, fileRef);
+    jest.spyOn(require('../../src/documents/statementStorage'), 'renderPagesToImages').mockResolvedValue(['page']);
+    const extractPage = jest.fn().mockResolvedValue({
+      transactions: [], beginning_balance: null, ending_balance: null, last_four: '4432', institution_name: null,
+    });
+
+    const worker = createStatementExtractionWorker({ pool, accountsService, institutionsService, extractPage });
+    await worker.processJobDirectly({ data: { sharedItemId, userId } });
+
+    const state = await fetchState(sharedItemId);
+    expect(state.parse_status).toBe('needs_clarification');
+    expect(state.extracted_data.resolvedAccountId).toBeNull();
   });
 
   test('a page that throws (e.g. unreadable) contributes nothing but does not fail the whole statement', async () => {
@@ -107,7 +124,6 @@ describe('statement extraction worker (against real Postgres)', () => {
     const state = await fetchState(sharedItemId);
     expect(state.extracted_data.transactions).toHaveLength(1);
     expect(state.parse_status).not.toBe('failed');
-    jest.restoreAllMocks();
   });
 
   test('every page failing marks the statement failed', async () => {
@@ -120,6 +136,25 @@ describe('statement extraction worker (against real Postgres)', () => {
     await worker.processJobDirectly({ data: { sharedItemId, userId } });
 
     expect((await fetchState(sharedItemId)).parse_status).toBe('failed');
-    jest.restoreAllMocks();
+  });
+
+  test('an error after rendering (e.g. account resolution failure) still marks the statement failed, not stuck pending', async () => {
+    const fileRef = await saveStatementFile({ buffer: Buffer.from('x'), mimetype: 'image/png', size: 1 });
+    const sharedItemId = await insertSharedItemAndDocument(userId, fileRef);
+    jest.spyOn(require('../../src/documents/statementStorage'), 'renderPagesToImages').mockResolvedValue(['page1']);
+    const extractPage = jest.fn().mockResolvedValue({
+      transactions: [{ date: '2026-01-13', description: 'COFFEE', amount: -4.5 }],
+      beginning_balance: 100, ending_balance: 95.5,
+      institution_name: 'Chase', account_type_text: 'Total Checking', last_four: '4432',
+    });
+    const brokenAccountsService = { findActiveAccountsByLastFour: () => Promise.reject(new Error('db down')) };
+
+    const worker = createStatementExtractionWorker({
+      pool, accountsService: brokenAccountsService, institutionsService, extractPage,
+    });
+    await worker.processJobDirectly({ data: { sharedItemId, userId } });
+
+    const { rows: [row] } = await pool.query('SELECT parse_status FROM shared_items WHERE id = $1', [sharedItemId]);
+    expect(row.parse_status).toBe('failed');
   });
 });

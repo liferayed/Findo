@@ -68,27 +68,34 @@ async function processStatementJob({ pool, accountsService, institutionsService,
     return;
   }
 
-  const resolvedAccountId = await resolveAccount({ accountsService, institutionsService }, userId, header);
-  const extractedData = {
-    transactions,
-    beginningBalance: pickFirstNonNull(beginningBalances),
-    endingBalance: [...endingBalances].reverse().find((v) => v !== null && v !== undefined) ?? null,
-    institutionName: header.institutionName,
-    accountTypeText: header.accountTypeText,
-    lastFour: header.lastFour,
-    creditCard: header.creditCard,
-    resolvedAccountId,
-    accountOfferDeclined: false,
-  };
+  try {
+    const resolvedAccountId = await resolveAccount({ accountsService, institutionsService }, userId, header);
+    const extractedData = {
+      transactions,
+      beginningBalance: pickFirstNonNull(beginningBalances),
+      endingBalance: [...endingBalances].reverse().find((v) => v !== null && v !== undefined) ?? null,
+      institutionName: header.institutionName,
+      accountTypeText: header.accountTypeText,
+      lastFour: header.lastFour,
+      creditCard: header.creditCard,
+      resolvedAccountId,
+      accountOfferDeclined: false,
+    };
 
-  await pool.query(
-    `UPDATE documents SET extracted_data = $1 WHERE shared_item_id = $2`,
-    [JSON.stringify(extractedData), sharedItemId]
-  );
-  await pool.query(`UPDATE shared_items SET parse_status = $1 WHERE id = $2`, [
-    resolvedAccountId ? 'parsed' : 'needs_clarification',
-    sharedItemId,
-  ]);
+    await pool.query(
+      `UPDATE documents SET extracted_data = $1 WHERE shared_item_id = $2`,
+      [JSON.stringify(extractedData), sharedItemId]
+    );
+    await pool.query(`UPDATE shared_items SET parse_status = $1 WHERE id = $2`, [
+      resolvedAccountId ? 'parsed' : 'needs_clarification',
+      sharedItemId,
+    ]);
+  } catch {
+    // Matches the renderPagesToImages failure convention above: any error from account
+    // resolution or the final writes must still flip parse_status away from 'pending',
+    // or the shared_item is stuck forever with no caller awaiting this job's rejection.
+    await pool.query(`UPDATE shared_items SET parse_status = 'failed' WHERE id = $1`, [sharedItemId]);
+  }
 }
 
 // `extractPage` is injectable (tests never call the real vision model — same pattern
