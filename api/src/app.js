@@ -69,6 +69,7 @@ function createApp({
   documentsService,
   statementUploadService,
   accountOfferService,
+  statementReviewService,
 }) {
   const app = express();
 
@@ -302,6 +303,19 @@ function createApp({
       const body = req.body || {};
       await accountOfferService.resolveAccountOffer(userId, req.params.id, { accept: Boolean(body.accept), type: body.type, nickname: body.nickname });
       res.status(200).json({ ok: true });
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.get('/documents/:id/review', async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      res.status(200).json(await statementReviewService.buildReview(userId, req.params.id));
     } catch (err) {
       if (err.statusCode) {
         res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
