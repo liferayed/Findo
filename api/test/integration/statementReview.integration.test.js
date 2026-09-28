@@ -174,7 +174,7 @@ describe('statement review service (against real Postgres)', () => {
   });
 
   test('rejects with a resolvedAccountId-specific message when parsed but no account was resolved', async () => {
-    const id = await seedReadyForReview(userId, account.id, { resolvedAccountId: null, accountOfferDeclined: true });
+    const id = await seedReadyForReview(userId, account.id, { resolvedAccountId: null, accountOfferDeclined: false });
     await expect(service.buildReview(userId, id)).rejects.toThrow(ValidationError);
     try {
       await service.buildReview(userId, id);
@@ -185,10 +185,24 @@ describe('statement review service (against real Postgres)', () => {
     }
   });
 
+  // F1.7 gap fix (Task 4): a declined offer legitimately has no resolvedAccountId — buildReview
+  // must return unassigned rows instead of throwing, skip findMatch/balanceMismatch entirely.
+  test('a declined statement returns unassigned rows and no balance-mismatch check, without throwing', async () => {
+    const id = await seedReadyForReview(userId, null, {
+      resolvedAccountId: null, accountOfferDeclined: true,
+      transactions: [{ date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 }],
+      endingBalance: 51.77,
+    });
+    const review = await service.buildReview(userId, id);
+    expect(review.accountId).toBeNull();
+    expect(review.rows).toEqual([{ index: 0, date: '2026-01-14', merchant: 'TARGET 1234', amount: -48.23, kind: 'unassigned' }]);
+    expect(review.balanceMismatch).toBeNull();
+  });
+
   test('the two error messages are distinct from each other', async () => {
     const wrongStatusId = await seedReadyForReview(userId, account.id);
     await pool.query(`UPDATE shared_items SET parse_status = 'needs_clarification' WHERE id = $1`, [wrongStatusId]);
-    const noAccountId = await seedReadyForReview(userId, account.id, { resolvedAccountId: null, accountOfferDeclined: true });
+    const noAccountId = await seedReadyForReview(userId, account.id, { resolvedAccountId: null, accountOfferDeclined: false });
 
     let wrongStatusMessage;
     let noAccountMessage;
