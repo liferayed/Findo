@@ -41,6 +41,17 @@ describe('transactionsService (against real Postgres)', () => {
     await pool.end();
   });
 
+  test('createTransaction stores merchant_normalized', async () => {
+    const transaction = await service.createTransaction(userId, {
+      account_id: accountId,
+      transaction_date: '2026-01-15',
+      amount: 9,
+      type: 'debit',
+      merchant_raw: "Trader Joe's #204",
+    });
+    expect(transaction.merchant_normalized).toBe('trader joe s');
+  });
+
   test('createTransaction inserts a row with server-shaped fields', async () => {
     const transaction = await service.createTransaction(userId, {
       account_id: accountId,
@@ -326,5 +337,15 @@ describe('transactionsService (against real Postgres)', () => {
     } finally {
       await deleteTestUser(otherUserId);
     }
+  });
+
+  test('createTransactionFromStatement inserts a debit row with is_manual false', async () => {
+    const t = await service.createTransactionFromStatement(userId, {
+      accountId, transactionDate: '2026-01-14', amount: -48.23, merchantRaw: 'TARGET 1234',
+    });
+    expect(t.is_manual).toBe(false);
+    expect(t.type).toBe('debit');
+    expect(Number(t.amount)).toBe(-48.23);
+    expect(t.reconciliation_status).toBe('confirmed');
   });
 });

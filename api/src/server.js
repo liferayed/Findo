@@ -9,19 +9,35 @@ const { createInstitutionsService } = require('./institutions/institutionsServic
 const { createTransactionsService } = require('./transactions/transactionsService');
 const { getCurrentUserId } = require('./currentUser');
 const { extractTransaction } = require('./llm/ollamaClient');
-const { extractReceipt } = require('./llm/ollamaVisionClient');
+const { extractReceipt, extractStatementPage } = require('./llm/ollamaVisionClient');
 const { createChatTransactionHandler } = require('./chat/chatTransactionHandler');
 const { createReceiptUploadHandler } = require('./documents/receiptUploadService');
 const { createDocumentsService } = require('./documents/documentsService');
+const { createStatementUploadService } = require('./documents/statementUploadService');
+const { createAccountOfferService } = require('./documents/accountOfferService');
+const { createStatementReviewService } = require('./documents/statementReviewService');
+const { createStatementConfirmService } = require('./documents/statementConfirmService');
+const { startStatementExtractionWorker } = require('./documents/statementExtractionService');
 
 startNoopWorker();
 
 const transactionsService = createTransactionsService({ pool });
 const accountsService = createAccountsService({ pool });
 const institutionsService = createInstitutionsService({ pool });
+
+// F1.7 final review C1: without this, uploaded statements enqueue a job that nothing ever
+// consumes in production — every real upload sits at 'pending' forever. accountsService and
+// institutionsService must already exist above (the worker resolves the uploaded statement onto
+// an existing account by institution + last four).
+startStatementExtractionWorker({ pool, accountsService, institutionsService, extractPage: extractStatementPage });
+
 const chatTransactionHandler = createChatTransactionHandler({ pool, transactionsService, extractTransaction });
 const receiptUploadHandler = createReceiptUploadHandler({ pool, transactionsService, accountsService, extractReceipt });
 const documentsService = createDocumentsService({ pool });
+const statementUploadService = createStatementUploadService({ pool });
+const accountOfferService = createAccountOfferService({ pool, accountsService, institutionsService });
+const statementReviewService = createStatementReviewService({ pool });
+const statementConfirmService = createStatementConfirmService({ pool, transactionsService });
 
 const app = createApp({
   checkHealth: () => checkHealth({ pingPostgres, pingRedis, runNoopJob }),
@@ -32,6 +48,10 @@ const app = createApp({
   chatTransactionHandler: chatTransactionHandler.handleMessage,
   receiptUploadHandler,
   documentsService,
+  statementUploadService,
+  accountOfferService,
+  statementReviewService,
+  statementConfirmService,
 });
 
 app.listen(config.port, () => {
