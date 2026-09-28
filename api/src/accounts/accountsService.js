@@ -5,14 +5,20 @@ const ACCOUNT_COLUMNS =
   'id, user_id, type, institution_name, nickname, last_four, current_balance, opening_balance, balance_as_of_date, currency, is_active, created_at';
 
 function createAccountsService({ pool }) {
-  async function createAccount(userId, input) {
+  // Accepts an optional `client` (a checked-out pg client) so a caller running its own
+  // BEGIN/COMMIT can create the account on that same connection, keeping it inside the caller's
+  // transaction instead of committing independently via `pool`. Same optional-client convention
+  // as transactionsService.createTransactionFromStatement. Defaults to `pool` when no client is
+  // given, same as every other method here.
+  async function createAccount(userId, input, { client } = {}) {
     const errors = validateAccountInput(input);
     if (errors.length > 0) {
       throw new ValidationError(errors);
     }
 
+    const runner = client || pool;
     try {
-      const { rows } = await pool.query(
+      const { rows } = await runner.query(
         `INSERT INTO accounts (user_id, type, institution_name, nickname, last_four)
          VALUES ($1, $2, $3, $4, $5)
          RETURNING ${ACCOUNT_COLUMNS}`,
