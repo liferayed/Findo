@@ -53,7 +53,9 @@ describe('normalizeStatementPageExtraction', () => {
   });
 
   test('a negative credit_card numeric value is invalid and normalizes to null', () => {
-    const raw = { transactions: [], credit_card: { due_date: null, minimum_payment: null, issuer: null, credit_limit: null, apr: -5 } };
+    // minimum_payment: 35 keeps this object from collapsing entirely to null (see the
+    // dedicated "every field null" test below), isolating the apr-specific assertion.
+    const raw = { transactions: [], credit_card: { due_date: null, minimum_payment: 35, issuer: null, credit_limit: null, apr: -5 } };
     const result = normalizeStatementPageExtraction(raw, { isFirstPage: true });
     expect(result.creditCard.apr).toBeNull();
   });
@@ -72,5 +74,21 @@ describe('normalizeStatementPageExtraction', () => {
   test('a last_four provided as a number is normalized to a string', () => {
     const result = normalizeStatementPageExtraction({ transactions: [], last_four: 4432 }, { isFirstPage: true });
     expect(result.lastFour).toBe('4432');
+  });
+
+  // F1.7 final review I1: a credit_card object where every field normalizes to null must
+  // collapse to a plain null, not a loosely-truthy object of nulls — otherwise callers that
+  // check `data.creditCard` truthiness (accountOfferService, statementConfirmService) wrongly
+  // treat a checking statement as a card statement whenever the model emits an empty credit_card key.
+  test('a credit_card object with every field null/absent normalizes to a plain null, not an object of nulls', () => {
+    const raw = { transactions: [], credit_card: { due_date: null, minimum_payment: null, issuer: null, credit_limit: null, apr: null } };
+    const result = normalizeStatementPageExtraction(raw, { isFirstPage: true });
+    expect(result.creditCard).toBeNull();
+  });
+
+  test('a credit_card object with at least one non-null field still normalizes to the full object', () => {
+    const raw = { transactions: [], credit_card: { due_date: null, minimum_payment: 35, issuer: null, credit_limit: null, apr: null } };
+    const result = normalizeStatementPageExtraction(raw, { isFirstPage: true });
+    expect(result.creditCard).toEqual({ due_date: null, minimum_payment: 35, issuer: null, credit_limit: null, apr: null });
   });
 });

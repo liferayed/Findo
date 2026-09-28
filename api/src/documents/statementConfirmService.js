@@ -16,7 +16,7 @@ function createStatementConfirmService({ pool, transactionsService }) {
     // not every joined table. Locking d too forces the re-read to pick up the just-committed
     // confirmedAt from the first call.
     const { rows } = await client.query(
-      `SELECT si.parse_status, d.extracted_data, d.document_type FROM shared_items si
+      `SELECT si.parse_status, d.extracted_data FROM shared_items si
        JOIN documents d ON d.shared_item_id = si.id
        WHERE si.id = $1 AND si.user_id = $2 FOR UPDATE OF si, d`,
       [sharedItemId, userId]
@@ -24,7 +24,7 @@ function createStatementConfirmService({ pool, transactionsService }) {
     if (rows.length === 0) {
       throw new NotFoundError('statement not found');
     }
-    const { parse_status: parseStatus, extracted_data: data, document_type: documentType } = rows[0];
+    const { parse_status: parseStatus, extracted_data: data } = rows[0];
     if (parseStatus !== 'parsed' || !data.resolvedAccountId) {
       throw new ValidationError(['this statement is not ready to confirm']);
     }
@@ -34,14 +34,23 @@ function createStatementConfirmService({ pool, transactionsService }) {
     if (data.confirmedAt) {
       throw new ValidationError(['this statement has already been confirmed']);
     }
-    return { data, documentType };
+    // F1.7 final review I1: "is this a card statement" must be keyed on the RESOLVED
+    // ACCOUNT's actual type, not on upload-time document_type (always 'bank_statement' in
+    // production, since the type isn't known until the account is resolved) nor on
+    // data.creditCard's mere presence (the model schema allows an all-null credit_card object
+    // even for a checking statement). The account id is only known once `data` is loaded above,
+    // hence this second lookup rather than a single joined query.
+    const { rows: [{ type: accountType }] } = await client.query(
+      'SELECT type FROM accounts WHERE id = $1', [data.resolvedAccountId]
+    );
+    return { data, accountType };
   }
 
   async function confirmReview(userId, sharedItemId, selections) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const { data, documentType } = await loadReadyRow(client, userId, sharedItemId);
+      const { data, accountType } = await loadReadyRow(client, userId, sharedItemId);
       const accountId = data.resolvedAccountId;
       const selectionByIndex = new Map(selections.map((s) => [s.index, s]));
       const excludeIds = [];
@@ -137,7 +146,7 @@ function createStatementConfirmService({ pool, transactionsService }) {
         excludeIds.push(transaction.id);
       }
 
-      if (documentType === 'card_statement' && data.creditCard) {
+      if (accountType === 'credit_card' && data.creditCard) {
         await upsertCreditCardDetails(client, accountId, data.creditCard);
       }
 

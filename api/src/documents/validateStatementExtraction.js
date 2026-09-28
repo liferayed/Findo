@@ -30,18 +30,25 @@ function normalizeTransactionRow(row) {
   return { date, description, amount };
 }
 
+// F1.7 final review I1: the model's schema allows a credit_card key to be emitted even for a
+// checking statement, with every field null inside. Returning that loosely-truthy object of
+// nulls made every `data.creditCard` truthiness check downstream (accountOfferService,
+// statementConfirmService) unreliable — so when nothing real was extracted, collapse to a
+// plain null here, once, rather than making every caller re-derive "was anything real found".
 function normalizeCreditCardFields(raw) {
   if (!raw || typeof raw !== 'object') {
     return null;
   }
   const dueDate = coerceToNullableString(raw.due_date);
-  return {
+  const normalized = {
     due_date: dueDate && isValidCalendarDate(dueDate) ? dueDate : null,
     minimum_payment: coerceToNullableNumber(raw.minimum_payment),
     issuer: coerceToNullableString(raw.issuer),
     credit_limit: coerceToNullableNumber(raw.credit_limit),
     apr: coerceToNullableNumber(raw.apr),
   };
+  const hasAnyRealValue = Object.values(normalized).some((value) => value !== null);
+  return hasAnyRealValue ? normalized : null;
 }
 
 // Defensive normalization of one page's raw model output — mirrors validateReceiptExtraction's

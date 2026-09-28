@@ -37,6 +37,20 @@ describe('account offer service (against real Postgres)', () => {
     expect(offer).toEqual({ institutionName: 'Chase', accountTypeText: 'Sapphire', lastFour: '9911', suggestedType: 'credit_card' });
   });
 
+  // F1.7 final review I1: after normalizeCreditCardFields collapses an all-null credit_card
+  // object to a plain null (validateStatementExtraction.js), suggestedType's truthiness check
+  // on data.creditCard becomes reliable — a checking statement whose credit_card key was
+  // extracted but empty now correctly suggests nothing, rather than 'credit_card'.
+  test('getAccountOffer suggests nothing when extracted_data.creditCard is null (the normalized "nothing real extracted" case)', async () => {
+    const id = await seedNeedsClarification(userId, {
+      institutionName: 'Chase', accountTypeText: 'Total Checking', lastFour: '9911',
+      creditCard: null,
+      transactions: [], resolvedAccountId: null, accountOfferDeclined: false,
+    });
+    const offer = await service.getAccountOffer(userId, id);
+    expect(offer.suggestedType).toBeNull();
+  });
+
   test('accept creates the account and resolves it onto extracted_data', async () => {
     const id = await seedNeedsClarification(userId, { institutionName: 'Chase', accountTypeText: null, lastFour: '9911', creditCard: null, transactions: [], resolvedAccountId: null, accountOfferDeclined: false });
     await service.resolveAccountOffer(userId, id, { accept: true, type: 'checking', nickname: 'Chase Checking' });

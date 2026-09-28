@@ -122,6 +122,35 @@ describe('statement confirm service (against real Postgres)', () => {
     expect(Number(details.minimum_payment)).toBe(35);
   });
 
+  // F1.7 final review I1: document_type is always 'bank_statement' at upload time in
+  // production — the upsert must not depend on it. It must be keyed on the RESOLVED
+  // ACCOUNT's actual type instead, which is known by confirm time regardless of document_type.
+  test('a credit-card upsert runs when the resolved account is a credit_card, even though document_type is bank_statement (as it always is in production)', async () => {
+    const card = await accountsService.createAccount(userId, { nickname: 'Sapphire', type: 'credit_card', institution_name: 'Chase' });
+    const { rows: [sharedItem] } = await pool.query(
+      `INSERT INTO shared_items (user_id, channel, content_type, file_ref, parse_status) VALUES ($1, 'web_upload', 'file', 'api/uploads/statements/x.png', 'parsed') RETURNING id`, [userId]
+    );
+    const extractedData = { transactions: [], beginningBalance: null, endingBalance: null, institutionName: null, accountTypeText: null, lastFour: null, creditCard: { due_date: '2026-02-10', minimum_payment: 35, issuer: null, credit_limit: null, apr: null }, resolvedAccountId: card.id, accountOfferDeclined: false };
+    // document_type deliberately left as 'bank_statement' — proving the fix no longer depends on it.
+    await pool.query(`INSERT INTO documents (shared_item_id, document_type, extracted_data) VALUES ($1, 'bank_statement', $2)`, [sharedItem.id, JSON.stringify(extractedData)]);
+
+    await confirmService.confirmReview(userId, sharedItem.id, []);
+    const { rows: [details] } = await pool.query('SELECT minimum_payment FROM credit_card_details WHERE account_id = $1', [card.id]);
+    expect(Number(details.minimum_payment)).toBe(35);
+  });
+
+  test('a checking account never attempts the credit-card upsert, even if extracted_data.creditCard has real fields', async () => {
+    const id = await seedReadyForReview(userId, account.id, []);
+    await pool.query(
+      `UPDATE documents SET extracted_data = jsonb_set(extracted_data, '{creditCard}', $1) WHERE shared_item_id = $2`,
+      [JSON.stringify({ due_date: '2026-02-10', minimum_payment: 35, issuer: null, credit_limit: null, apr: null }), id]
+    );
+
+    await confirmService.confirmReview(userId, id, []);
+    const { rows: details } = await pool.query('SELECT 1 FROM credit_card_details WHERE account_id = $1', [account.id]);
+    expect(details).toHaveLength(0);
+  });
+
   // --- Round 2, Finding 1: two truly concurrent confirms on the SAME statement must not both
   // land a write. loadReadyRow's lock has to cover documents (d), not just shared_items (si) —
   // otherwise the second call, once unblocked, still reads the pre-confirm extracted_data
