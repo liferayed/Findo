@@ -7,7 +7,7 @@
 const { pool } = require('../../src/db');
 const { createAccountsService } = require('../../src/accounts/accountsService');
 const { createInstitutionsService } = require('../../src/institutions/institutionsService');
-const { enqueueStatementExtraction } = require('../../src/documents/statementQueue');
+const { enqueueStatementExtraction, statementQueue } = require('../../src/documents/statementQueue');
 const { startStatementExtractionWorker } = require('../../src/documents/statementExtractionService');
 const { saveStatementFile } = require('../../src/documents/statementStorage');
 const statementStorage = require('../../src/documents/statementStorage');
@@ -57,6 +57,11 @@ describe('statement extraction worker against a REAL BullMQ queue (against real 
 
   afterAll(async () => {
     await worker.close();
+    // F1.7 final review M4: this suite (and statementUpload.integration.test.js) both use the
+    // real, shared `findo-statement-extraction` BullMQ queue. Clean up this file's own jobs so
+    // they don't pile up in Redis across test runs and confuse a later run of either suite. This
+    // is cleanup of jobs THIS file enqueued, not a change to the shared queue name/wiring itself.
+    await statementQueue.obliterate({ force: true });
     await pool.end();
   });
 
