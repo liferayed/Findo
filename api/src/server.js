@@ -16,6 +16,7 @@ const { createDocumentsService } = require('./documents/documentsService');
 const { createStatementUploadService } = require('./documents/statementUploadService');
 const { createAccountOfferService } = require('./documents/accountOfferService');
 const { createStatementReviewService } = require('./documents/statementReviewService');
+const { createStatementConfirmService } = require('./documents/statementConfirmService');
 
 startNoopWorker();
 
@@ -28,6 +29,7 @@ const documentsService = createDocumentsService({ pool });
 const statementUploadService = createStatementUploadService({ pool });
 const accountOfferService = createAccountOfferService({ pool, accountsService, institutionsService });
 const statementReviewService = createStatementReviewService({ pool });
+const statementConfirmService = createStatementConfirmService({ pool, transactionsService });
 
 const app = createApp({
   checkHealth: () => checkHealth({ pingPostgres, pingRedis, runNoopJob }),
@@ -41,6 +43,7 @@ const app = createApp({
   statementUploadService,
   accountOfferService,
   statementReviewService,
+  statementConfirmService,
 });
 
 app.listen(config.port, () => {
