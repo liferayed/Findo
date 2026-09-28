@@ -1,9 +1,7 @@
 const { saveStatementFile } = require('./statementStorage');
 const { enqueueStatementExtraction } = require('./statementQueue');
 const { ValidationError, NotFoundError } = require('../errors');
-
-const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'application/pdf'];
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const { ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } = require('./validateStatementUpload');
 
 function createStatementUploadService({ pool }) {
   async function handleStatementUpload(userId, { file }) {

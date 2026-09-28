@@ -7,7 +7,7 @@ const { ACCOUNT_TYPES } = require('./accounts/validateAccountInput');
 const { MAX_FILE_SIZE_BYTES, FILE_TOO_LARGE_MESSAGE } = require('./documents/validateReceiptUpload');
 const {
   MAX_FILE_SIZE_BYTES: STATEMENT_MAX_FILE_SIZE_BYTES,
-} = require('./documents/statementUploadService');
+} = require('./documents/validateStatementUpload');
 
 function statusCodeFor(err) {
   return err.statusCode || 500;
