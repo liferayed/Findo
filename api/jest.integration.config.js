@@ -4,6 +4,7 @@ module.exports = {
     '/node_modules/',
     'chatTransactionCapture.integration.test.js',
     'receiptUpload.integration.test.js',
+    'statementExtractionLlm.integration.test.js',
   ],
   testTimeout: 20000,
   forceExit: true,
