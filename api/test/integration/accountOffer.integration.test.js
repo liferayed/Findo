@@ -47,11 +47,18 @@ describe('account offer service (against real Postgres)', () => {
     expect(account.last_four).toBe('9911');
   });
 
-  test('decline marks accountOfferDeclined without creating an account', async () => {
+  // F1.7 final review I3: declining used to write accountOfferDeclined:true and flip
+  // parse_status to 'parsed', which getStatementStatus then reported as ready_for_review — but
+  // /review and /confirm-review both correctly reject a statement with no resolvedAccountId,
+  // leaving no way forward. Until a per-row account picker exists, decline is rejected outright
+  // instead of being written as a dead end.
+  test('decline is rejected — not yet supported — and leaves the statement untouched', async () => {
     const id = await seedNeedsClarification(userId, { institutionName: 'Chase', accountTypeText: null, lastFour: '9911', creditCard: null, transactions: [], resolvedAccountId: null, accountOfferDeclined: false });
-    await service.resolveAccountOffer(userId, id, { accept: false });
-    const { rows: [row] } = await pool.query(`SELECT d.extracted_data FROM documents d JOIN shared_items si ON si.id = d.shared_item_id WHERE si.id = $1`, [id]);
-    expect(row.extracted_data.accountOfferDeclined).toBe(true);
+    await expect(service.resolveAccountOffer(userId, id, { accept: false })).rejects.toThrow(ValidationError);
+
+    const { rows: [row] } = await pool.query(`SELECT si.parse_status, d.extracted_data FROM documents d JOIN shared_items si ON si.id = d.shared_item_id WHERE si.id = $1`, [id]);
+    expect(row.parse_status).toBe('needs_clarification'); // still pending, not stuck in a dead end
+    expect(row.extracted_data.accountOfferDeclined).toBe(false);
     expect(row.extracted_data.resolvedAccountId).toBeNull();
   });
 
@@ -59,5 +66,35 @@ describe('account offer service (against real Postgres)', () => {
     const id = await seedNeedsClarification(userId, { institutionName: null, accountTypeText: null, lastFour: null, creditCard: null, transactions: [], resolvedAccountId: 'x', accountOfferDeclined: false });
     await pool.query(`UPDATE shared_items SET parse_status = 'parsed' WHERE id = $1`, [id]);
     await expect(service.getAccountOffer(userId, id)).rejects.toThrow(ValidationError);
+  });
+
+  // F1.7 final review I6: the accept path used to read extracted_data without a lock, create
+  // the account, then write two separate non-transactional UPDATEs — two concurrent accepts (or
+  // a retry after a partial failure) could each create an account, leaving an orphan. Now the
+  // whole accept path is one BEGIN/COMMIT with a SELECT ... FOR UPDATE OF si, d lock and a
+  // conditional final UPDATE, mirroring statementConfirmService's Task 8 concurrency fix.
+  test('two genuinely concurrent accepts on the same statement never both create an account', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const id = await seedNeedsClarification(userId, {
+        institutionName: 'Chase', accountTypeText: null, lastFour: `99${i}${i}`, creditCard: null,
+        transactions: [], resolvedAccountId: null, accountOfferDeclined: false,
+      });
+
+      const results = await Promise.allSettled([
+        service.resolveAccountOffer(userId, id, { accept: true, type: 'checking', nickname: `Concurrent-A-${i}` }),
+        service.resolveAccountOffer(userId, id, { accept: true, type: 'checking', nickname: `Concurrent-B-${i}` }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1); // exactly one of the two settles fulfilled...
+      expect(rejected).toHaveLength(1); // ...and exactly one settles rejected
+      expect(rejected[0].reason).toBeInstanceOf(ValidationError);
+
+      const { rows: accounts } = await pool.query(
+        `SELECT * FROM accounts WHERE user_id = $1 AND nickname LIKE $2`, [userId, `Concurrent-%-${i}`]
+      );
+      expect(accounts).toHaveLength(1); // exactly one account landed, never two
+    }
   });
 });
