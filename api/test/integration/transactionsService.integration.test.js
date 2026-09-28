@@ -338,4 +338,14 @@ describe('transactionsService (against real Postgres)', () => {
       await deleteTestUser(otherUserId);
     }
   });
+
+  test('createTransactionFromStatement inserts a debit row with is_manual false', async () => {
+    const t = await service.createTransactionFromStatement(userId, {
+      accountId, transactionDate: '2026-01-14', amount: -48.23, merchantRaw: 'TARGET 1234',
+    });
+    expect(t.is_manual).toBe(false);
+    expect(t.type).toBe('debit');
+    expect(Number(t.amount)).toBe(-48.23);
+    expect(t.reconciliation_status).toBe('confirmed');
+  });
 });

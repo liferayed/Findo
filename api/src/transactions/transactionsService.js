@@ -135,6 +135,22 @@ function createTransactionsService({ pool }) {
     );
   }
 
+  // Used by F1.7's statement confirm flow. `amount` arrives already signed (statement rows are
+  // signed at extraction, unlike F1.3's separate amount+type form fields) — type is derived from
+  // its sign rather than passed separately. Always is_manual: false, reconciliation_status:
+  // 'confirmed' (a statement-sourced row has nothing pending to reconcile against itself).
+  // Accepts an optional `client` for the same reason createTransactionFromReceipt does — F1.7's
+  // confirm step runs this inside its own BEGIN/COMMIT alongside transaction_sources writes.
+  async function createTransactionFromStatement(userId, { accountId, transactionDate, amount, merchantRaw }, { client } = {}) {
+    await findOwnedAccount(userId, accountId, { requireActive: true });
+    return inTransaction(client, (c) =>
+      insertTransaction(c, {
+        accountId, transactionDate, signedAmount: amount, merchantRaw,
+        type: amount < 0 ? 'debit' : 'credit', isManual: false, reconciliationStatus: 'confirmed',
+      })
+    );
+  }
+
   async function listTransactionsForAccount(userId, accountId) {
     // Listing is allowed against an inactive account (only creation is blocked).
     await findOwnedAccount(userId, accountId, { requireActive: false });
@@ -182,6 +198,7 @@ function createTransactionsService({ pool }) {
     createTransaction,
     createTransactionFromChat,
     createTransactionFromReceipt,
+    createTransactionFromStatement,
     listTransactionsForAccount,
     listTransactions,
     findOwnedAccount,
