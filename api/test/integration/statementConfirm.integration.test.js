@@ -122,6 +122,40 @@ describe('statement confirm service (against real Postgres)', () => {
     expect(Number(details.minimum_payment)).toBe(35);
   });
 
+  // --- Round 2, Finding 1: two truly concurrent confirms on the SAME statement must not both
+  // land a write. loadReadyRow's lock has to cover documents (d), not just shared_items (si) —
+  // otherwise the second call, once unblocked, still reads the pre-confirm extracted_data
+  // snapshot and passes the replay guard. Looped several times since lock-acquisition order
+  // between the two connections is not fixed run to run.
+  test('two genuinely concurrent force-confirms on the same statement never both insert (documents row must be locked too)', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const iterAccount = await accountsService.createAccount(userId, { nickname: `Concurrent-${i}`, type: 'checking', institution_name: 'Chase' });
+      const existing = await transactionsService.createTransactionFromChat(userId, {
+        accountId: iterAccount.id, transactionDate: '2026-01-12', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'confirmed',
+      });
+      const id = await seedReadyForReview(userId, iterAccount.id, [{ date: '2026-01-14', description: 'Target', amount: -48.23 }]);
+
+      // confirmReview opens its own client internally (pool.connect()), so two real,
+      // independently-connected transactions race here — this is the race2.js probe as a
+      // real repo test, not a throwaway script.
+      const results = await Promise.allSettled([
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'force' }]),
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'force' }]),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1); // exactly one of the two settles fulfilled...
+      expect(rejected).toHaveLength(1); // ...and exactly one settles rejected
+      expect(rejected[0].reason).toBeInstanceOf(ValidationError);
+
+      const { rows: newRows } = await pool.query(
+        'SELECT * FROM transactions WHERE account_id = $1 AND id != $2', [iterAccount.id, existing.id]
+      );
+      expect(newRows).toHaveLength(1); // exactly one forced transaction landed, never two
+    }
+  });
+
   // --- Fix 1: replay/double-confirm must be rejected, not double-write ---
   test('confirming an already-confirmed statement is rejected and does not double-insert or double-move the balance', async () => {
     const id = await seedReadyForReview(userId, account.id, [{ date: '2026-01-14', description: 'TARGET', amount: -48.23 }]);
@@ -166,10 +200,18 @@ describe('statement confirm service (against real Postgres)', () => {
       expect(rows).toHaveLength(0);
     });
 
-    test("action 'force' on a genuinely ambiguous row succeeds and leaves overridden_candidate_id NULL (multiple candidates, not one to blame)", async () => {
-      await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-12', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
-      await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-13', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+    test("action 'force' on a genuinely ambiguous row succeeds and records the highest-confidence tied candidate as overridden_candidate_id (a lead to trace, not a certain match)", async () => {
+      const olderCandidate = await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-13', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      const closerCandidate = await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-14', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
       const id = await seedReadyForReview(userId, account.id, [{ date: '2026-01-14', description: 'Target', amount: -48.23 }]);
+
+      // Sanity-check against the review service which of the two tied candidates scores highest
+      // (same date as the statement row should score at least as high as the one a day off).
+      const review = await reviewService.buildReview(userId, id);
+      expect(review.rows[0].kind).toBe('ambiguous');
+      const sorted = review.rows[0].candidates.slice().sort((a, b) => b.confidence - a.confidence);
+      const expectedRecordedId = sorted[0].candidate.id;
+      expect(expectedRecordedId).toBe(closerCandidate.id);
 
       await confirmService.confirmReview(userId, id, [{ index: 0, action: 'force' }]);
 
@@ -178,9 +220,11 @@ describe('statement confirm service (against real Postgres)', () => {
       const inserted = all.filter((t) => t.reconciliation_status === 'confirmed'); // the two originals stayed unconfirmed
       expect(inserted).toHaveLength(1);
       const { rows: [source] } = await pool.query('SELECT overridden_candidate_id FROM transaction_sources WHERE transaction_id = $1', [inserted[0].id]);
-      // Intentional, not a silent bug: ambiguous means multiple candidates, so there is no
-      // single one to record as "overridden" — asserted explicitly here per the fix's design.
-      expect(source.overridden_candidate_id).toBeNull();
+      // Not lossy: ambiguous means multiple tied candidates, so the highest-confidence one is
+      // recorded so a later discrepancy has a lead to trace, even though it isn't a certain match.
+      expect(source.overridden_candidate_id).toBe(expectedRecordedId);
+      expect(source.overridden_candidate_id).not.toBeNull();
+      expect([olderCandidate.id, closerCandidate.id]).toContain(source.overridden_candidate_id);
     });
 
     test("an unrecognized action string is rejected with a clean ValidationError, not a 500", async () => {
@@ -217,5 +261,49 @@ describe('statement confirm service (against real Postgres)', () => {
     expect(after.reconciliation_status).toBe('unconfirmed'); // NOT auto-corroborated by row 1
     const { rows: all } = await pool.query('SELECT * FROM transactions WHERE account_id = $1', [account.id]);
     expect(all).toHaveLength(1); // no new row inserted either — both rows were left unselected
+  });
+
+  // --- Round 2, Finding 2: excludeIds must also cover this batch's OWN just-inserted rows and
+  // the force branch's overridden candidate, mirroring statementReviewService.buildReview.
+  describe('excludeIds must not let a batch self-match its own inserts', () => {
+    test('scenario A: two genuinely separate but identical rows in one statement both insert as new, without row 1 falsely matching row 0\'s own just-inserted transaction', async () => {
+      const id = await seedReadyForReview(userId, account.id, [
+        { date: '2026-01-14', description: 'Corner Coffee', amount: -5 },
+        { date: '2026-01-14', description: 'Corner Coffee', amount: -5 },
+      ]);
+
+      await confirmService.confirmReview(userId, id, [{ index: 0, action: 'new' }, { index: 1, action: 'new' }]);
+
+      const { rows: all } = await pool.query('SELECT * FROM transactions WHERE account_id = $1', [account.id]);
+      expect(all).toHaveLength(2); // two separate transactions, not a rejected batch
+      expect(await balanceOf(account.id)).toBe(-10);
+    });
+
+    test('scenario B: force over a duplicate excludes both the overridden candidate AND the newly-forced row, so a third identical row correctly classifies as new instead of re-matching either', async () => {
+      const existing = await transactionsService.createTransactionFromChat(userId, {
+        accountId: account.id, transactionDate: '2026-01-12', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'confirmed',
+      });
+      const id = await seedReadyForReview(userId, account.id, [
+        { date: '2026-01-14', description: 'Target', amount: -48.23 }, // duplicate vs `existing`, forced
+        { date: '2026-01-14', description: 'Target', amount: -48.23 }, // identical row — must end up genuinely new
+      ]);
+
+      await confirmService.confirmReview(userId, id, [{ index: 0, action: 'force' }, { index: 1, action: 'new' }]);
+
+      const { rows: all } = await pool.query('SELECT * FROM transactions WHERE account_id = $1', [account.id]);
+      expect(all).toHaveLength(3); // original + row 0's forced insert + row 1's new insert
+
+      const { rows: [forcedSource] } = await pool.query(
+        `SELECT ts.transaction_id, ts.overridden_candidate_id FROM transaction_sources ts
+         JOIN transactions t ON t.id = ts.transaction_id
+         WHERE ts.shared_item_id = $1 AND ts.overridden_candidate_id IS NOT NULL`,
+        [id]
+      );
+      expect(forcedSource.overridden_candidate_id).toBe(existing.id);
+
+      const newlyInsertedIds = all.filter((t) => t.id !== existing.id).map((t) => t.id);
+      expect(newlyInsertedIds).toHaveLength(2);
+      expect(newlyInsertedIds).not.toContain(existing.id);
+    });
   });
 });

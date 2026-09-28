@@ -10,10 +10,15 @@ const ADJUSTMENT_REASONS = ['tip', 'tax', 'fee', 'other'];
 // applied at all (F1.7 design's "nothing written until confirm" rule, completed here).
 function createStatementConfirmService({ pool, transactionsService }) {
   async function loadReadyRow(client, userId, sharedItemId) {
+    // Lock BOTH si and d: the replay guard below reads d.extracted_data, and locking only si
+    // (the earlier bug) lets a second concurrent call, once unblocked, still see the pre-confirm
+    // extracted_data — Postgres only re-fetches the row(s) named in FOR UPDATE OF after the wait,
+    // not every joined table. Locking d too forces the re-read to pick up the just-committed
+    // confirmedAt from the first call.
     const { rows } = await client.query(
       `SELECT si.parse_status, d.extracted_data, d.document_type FROM shared_items si
        JOIN documents d ON d.shared_item_id = si.id
-       WHERE si.id = $1 AND si.user_id = $2 FOR UPDATE OF si`,
+       WHERE si.id = $1 AND si.user_id = $2 FOR UPDATE OF si, d`,
       [sharedItemId, userId]
     );
     if (rows.length === 0) {
@@ -94,16 +99,40 @@ function createStatementConfirmService({ pool, transactionsService }) {
         }
         // 'new' or 'force' — insert a genuinely new row either way; 'force' additionally
         // records which flagged candidate was overridden (F1.7 design §2.4). Ambiguous has
-        // multiple candidates, not one to record, so overridden_candidate_id stays NULL for a
-        // forced ambiguous match — intentional, not a bug (match.candidate is undefined there).
+        // multiple tied candidates (match.candidates), not a single match.candidate — the
+        // highest-confidence one is recorded so a later discrepancy has a lead to trace, even
+        // though it isn't a certain match.
+        let overriddenCandidateId = null;
+        if (selection.action === 'force') {
+          if (match.candidate) {
+            overriddenCandidateId = match.candidate.id;
+          } else if (match.candidates) {
+            const sorted = match.candidates.slice().sort((a, b) => b.confidence - a.confidence);
+            overriddenCandidateId = sorted[0].candidate.id;
+            // Safer choice: exclude ALL tied candidates, not just the recorded one, so a later
+            // row in this batch can't claim any of them either.
+            for (const tied of sorted) {
+              excludeIds.push(tied.candidate.id);
+            }
+          }
+        }
         const transaction = await transactionsService.createTransactionFromStatement(
           userId, { accountId, transactionDate: row.date, amount: row.amount, merchantRaw: row.description }, { client }
         );
         await client.query(
           `INSERT INTO transaction_sources (transaction_id, shared_item_id, role, overridden_candidate_id)
            VALUES ($1, $2, 'origin', $3)`,
-          [transaction.id, sharedItemId, selection.action === 'force' && match.candidate ? match.candidate.id : null]
+          [transaction.id, sharedItemId, overriddenCandidateId]
         );
+        // Mirror statementReviewService.buildReview's excludeIds rule for this batch's own
+        // inserts too: a later row in the SAME confirmReview call must not be allowed to
+        // self-match against a transaction this call just created (Finding 2). The force
+        // branch's overridden duplicate candidate is pushed unconditionally as well, matching
+        // buildReview's push condition for duplicate/possible exactly.
+        if (selection.action === 'force' && match.candidate) {
+          excludeIds.push(match.candidate.id);
+        }
+        excludeIds.push(transaction.id);
       }
 
       if (documentType === 'card_statement' && data.creditCard) {
