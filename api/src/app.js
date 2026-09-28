@@ -68,6 +68,7 @@ function createApp({
   receiptUploadHandler,
   documentsService,
   statementUploadService,
+  accountOfferService,
 }) {
   const app = express();
 
@@ -273,6 +274,34 @@ function createApp({
       const userId = await resolveCurrentUserId();
       const status = await statementUploadService.getStatementStatus(userId, req.params.id);
       res.status(200).json(status);
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.get('/documents/:id/account-offer', async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      res.status(200).json(await accountOfferService.getAccountOffer(userId, req.params.id));
+    } catch (err) {
+      if (err.statusCode) {
+        res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  app.post('/documents/:id/account-offer', async (req, res) => {
+    try {
+      const userId = await resolveCurrentUserId();
+      const body = req.body || {};
+      await accountOfferService.resolveAccountOffer(userId, req.params.id, { accept: Boolean(body.accept), type: body.type, nickname: body.nickname });
+      res.status(200).json({ ok: true });
     } catch (err) {
       if (err.statusCode) {
         res.status(statusCodeFor(err)).json(err.errors ? { errors: err.errors } : { error: err.message });
