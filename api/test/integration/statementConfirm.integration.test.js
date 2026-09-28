@@ -2,11 +2,13 @@ const { pool } = require('../../src/db');
 const { createAccountsService } = require('../../src/accounts/accountsService');
 const { createTransactionsService } = require('../../src/transactions/transactionsService');
 const { createStatementConfirmService } = require('../../src/documents/statementConfirmService');
+const { createStatementReviewService } = require('../../src/documents/statementReviewService');
 const { ValidationError } = require('../../src/errors');
 
 const accountsService = createAccountsService({ pool });
 const transactionsService = createTransactionsService({ pool });
 const confirmService = createStatementConfirmService({ pool, transactionsService });
+const reviewService = createStatementReviewService({ pool });
 
 async function createTestUser(email) {
   const { rows } = await pool.query(`INSERT INTO users (email, name) VALUES ($1, 'T') RETURNING id`, [email]);
@@ -118,5 +120,102 @@ describe('statement confirm service (against real Postgres)', () => {
     await confirmService.confirmReview(userId, sharedItem.id, []);
     const { rows: [details] } = await pool.query('SELECT minimum_payment FROM credit_card_details WHERE account_id = $1', [card.id]);
     expect(Number(details.minimum_payment)).toBe(35);
+  });
+
+  // --- Fix 1: replay/double-confirm must be rejected, not double-write ---
+  test('confirming an already-confirmed statement is rejected and does not double-insert or double-move the balance', async () => {
+    const id = await seedReadyForReview(userId, account.id, [{ date: '2026-01-14', description: 'TARGET', amount: -48.23 }]);
+    await confirmService.confirmReview(userId, id, [{ index: 0, action: 'new' }]);
+
+    await expect(
+      confirmService.confirmReview(userId, id, [{ index: 0, action: 'new' }])
+    ).rejects.toThrow(ValidationError);
+
+    const { rows: all } = await pool.query('SELECT * FROM transactions WHERE account_id = $1', [account.id]);
+    expect(all).toHaveLength(1); // still exactly one transaction, not two
+    expect(await balanceOf(account.id)).toBe(-48.23); // balance reflects only the first confirm
+  });
+
+  // --- Fix 2: selection.action must be validated against the row's actual match kind ---
+  describe('action validation against match kind', () => {
+    test("action 'tag' on a row with no candidate (new) is rejected, not an unhandled crash", async () => {
+      const id = await seedReadyForReview(userId, account.id, [{ date: '2026-01-14', description: 'Brand New Merchant', amount: -10 }]);
+      await expect(
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'tag', adjustmentReason: 'tip' }])
+      ).rejects.toThrow(ValidationError);
+      const { rows } = await pool.query('SELECT * FROM transactions WHERE account_id = $1', [account.id]);
+      expect(rows).toHaveLength(0); // rolled back, nothing written
+    });
+
+    test("action 'new' on a row that is actually a duplicate is rejected", async () => {
+      await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-12', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'confirmed' });
+      const id = await seedReadyForReview(userId, account.id, [{ date: '2026-01-14', description: 'Target', amount: -48.23 }]);
+      await expect(
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'new' }])
+      ).rejects.toThrow(ValidationError);
+      const { rows } = await pool.query('SELECT * FROM transactions WHERE account_id = $1', [account.id]);
+      expect(rows).toHaveLength(1); // only the pre-existing duplicate candidate — no second row inserted
+    });
+
+    test("action 'force' on a row that is actually new (no match at all) is rejected", async () => {
+      const id = await seedReadyForReview(userId, account.id, [{ date: '2026-01-14', description: 'Brand New Merchant', amount: -10 }]);
+      await expect(
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'force' }])
+      ).rejects.toThrow(ValidationError);
+      const { rows } = await pool.query('SELECT * FROM transactions WHERE account_id = $1', [account.id]);
+      expect(rows).toHaveLength(0);
+    });
+
+    test("action 'force' on a genuinely ambiguous row succeeds and leaves overridden_candidate_id NULL (multiple candidates, not one to blame)", async () => {
+      await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-12', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-13', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      const id = await seedReadyForReview(userId, account.id, [{ date: '2026-01-14', description: 'Target', amount: -48.23 }]);
+
+      await confirmService.confirmReview(userId, id, [{ index: 0, action: 'force' }]);
+
+      const { rows: all } = await pool.query('SELECT * FROM transactions WHERE account_id = $1', [account.id]);
+      expect(all).toHaveLength(3); // the two original ambiguous candidates + one newly-inserted row
+      const inserted = all.filter((t) => t.reconciliation_status === 'confirmed'); // the two originals stayed unconfirmed
+      expect(inserted).toHaveLength(1);
+      const { rows: [source] } = await pool.query('SELECT overridden_candidate_id FROM transaction_sources WHERE transaction_id = $1', [inserted[0].id]);
+      // Intentional, not a silent bug: ambiguous means multiple candidates, so there is no
+      // single one to record as "overridden" — asserted explicitly here per the fix's design.
+      expect(source.overridden_candidate_id).toBeNull();
+    });
+
+    test("an unrecognized action string is rejected with a clean ValidationError, not a 500", async () => {
+      const id = await seedReadyForReview(userId, account.id, [{ date: '2026-01-14', description: 'Brand New Merchant', amount: -10 }]);
+      await expect(
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'bogus' }])
+      ).rejects.toThrow(ValidationError);
+    });
+  });
+
+  // --- Fix 3: excludeIds must accumulate for duplicate/possible rows too, mirroring statementReviewService ---
+  test('a candidate already claimed as a possible match for an earlier row is excluded, and the later row ends up new instead of auto-corroborating (matches what buildReview would show)', async () => {
+    const existing = await transactionsService.createTransactionFromChat(userId, {
+      accountId: account.id, transactionDate: '2026-01-12', amount: 42, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed',
+    });
+    const transactions = [
+      { date: '2026-01-14', description: 'Target', amount: -50.4 }, // 'possible' vs existing (42 -> 50.4, within adjustment range), left unselected
+      { date: '2026-01-14', description: 'Target', amount: -42 }, // would exactly match existing (-> 'corroborate') if existing weren't already claimed by row 0
+    ];
+    const id = await seedReadyForReview(userId, account.id, transactions);
+
+    // Sanity-check against the review service: with excludeIds accumulating correctly,
+    // row 0 is 'possible' against existing and row 1 is 'new' (existing already claimed).
+    const review = await reviewService.buildReview(userId, id);
+    expect(review.rows[0].kind).toBe('possible');
+    expect(review.rows[0].candidate.id).toBe(existing.id);
+    expect(review.rows[1].kind).toBe('new');
+
+    // Leave row 0 untagged/unselected and don't select row 1 either — if confirm's excludeIds
+    // does not mirror the review's, row 1 would silently auto-corroborate against `existing`.
+    await confirmService.confirmReview(userId, id, []);
+
+    const { rows: [after] } = await pool.query('SELECT reconciliation_status FROM transactions WHERE id = $1', [existing.id]);
+    expect(after.reconciliation_status).toBe('unconfirmed'); // NOT auto-corroborated by row 1
+    const { rows: all } = await pool.query('SELECT * FROM transactions WHERE account_id = $1', [account.id]);
+    expect(all).toHaveLength(1); // no new row inserted either — both rows were left unselected
   });
 });

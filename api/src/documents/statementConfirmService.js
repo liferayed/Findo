@@ -23,6 +23,12 @@ function createStatementConfirmService({ pool, transactionsService }) {
     if (parseStatus !== 'parsed' || !data.resolvedAccountId) {
       throw new ValidationError(['this statement is not ready to confirm']);
     }
+    // parse_status stays 'parsed' after a successful confirm by design (F1.7 §2.4), so a
+    // replay/double-submit of confirm has to be caught here via confirmedAt, before any writes —
+    // otherwise it would double-insert transactions and double-move the balance.
+    if (data.confirmedAt) {
+      throw new ValidationError(['this statement has already been confirmed']);
+    }
     return { data, documentType };
   }
 
@@ -45,8 +51,35 @@ function createStatementConfirmService({ pool, transactionsService }) {
           excludeIds.push(match.candidate.id);
           continue;
         }
+
+        if (selection) {
+          if (!['new', 'force', 'tag'].includes(selection.action)) {
+            throw new ValidationError([`action must be one of: new, force, tag`]);
+          }
+          // Validate the requested action against the row's *actual* match kind — fail fast,
+          // before any write, so a mismatched action rolls back the whole batch instead of
+          // either crashing (tag with no candidate) or silently doing the wrong thing.
+          if (selection.action === 'tag' && match.kind !== 'possible') {
+            throw new ValidationError(['tag requires a possible match']);
+          }
+          if (selection.action === 'force' && match.kind !== 'duplicate' && match.kind !== 'ambiguous') {
+            throw new ValidationError(['force is only valid for a duplicate or ambiguous match']);
+          }
+          if (selection.action === 'new' && match.kind !== 'new') {
+            throw new ValidationError(['new is only valid when no match was found']);
+          }
+        }
+
         if (!selection) {
-          continue; // pre-unchecked (duplicate/possible/ambiguous/new-but-unselected) and never checked — skip
+          // Pre-unchecked (duplicate/possible/ambiguous/new-but-unselected) and never checked — skip.
+          // Mirror statementReviewService.buildReview's exact excludeIds rule here too: a
+          // duplicate/possible row that's left with no accepted action still "claims" its
+          // candidate, so a later row in the same batch can't silently auto-corroborate against
+          // it (that candidate was already shown to the user against *this* row in review).
+          if ((match.kind === 'duplicate' || match.kind === 'possible') && match.candidate) {
+            excludeIds.push(match.candidate.id);
+          }
+          continue;
         }
         if (selection.action === 'tag') {
           if (!ADJUSTMENT_REASONS.includes(selection.adjustmentReason)) {
@@ -60,7 +93,9 @@ function createStatementConfirmService({ pool, transactionsService }) {
           continue;
         }
         // 'new' or 'force' — insert a genuinely new row either way; 'force' additionally
-        // records which flagged candidate was overridden (F1.7 design §2.4).
+        // records which flagged candidate was overridden (F1.7 design §2.4). Ambiguous has
+        // multiple candidates, not one to record, so overridden_candidate_id stays NULL for a
+        // forced ambiguous match — intentional, not a bug (match.candidate is undefined there).
         const transaction = await transactionsService.createTransactionFromStatement(
           userId, { accountId, transactionDate: row.date, amount: row.amount, merchantRaw: row.description }, { client }
         );
