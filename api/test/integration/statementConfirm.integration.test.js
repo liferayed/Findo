@@ -306,4 +306,94 @@ describe('statement confirm service (against real Postgres)', () => {
       expect(newlyInsertedIds).not.toContain(existing.id);
     });
   });
+
+  // --- Round 3: forcing an ambiguous row must NOT exclude its tied candidates from later rows
+  // in the same batch. buildReview never excludes ambiguous candidates at all (only
+  // corroborate/duplicate/possible) — so confirm pushing every tied candidate into excludeIds
+  // diverges from what review showed the user, with real consequences for later rows.
+  describe('Round 3: force on an ambiguous row must not exclude its tied candidates for later rows', () => {
+    test('two rows both ambiguous against the same overlapping {A,B} set: forcing BOTH must succeed (not reject the batch) and leave A and B untouched', async () => {
+      const olderCandidate = await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-13', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      const closerCandidate = await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-14', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      const id = await seedReadyForReview(userId, account.id, [
+        { date: '2026-01-14', description: 'Target', amount: -48.23 },
+        { date: '2026-01-14', description: 'Target', amount: -48.23 },
+      ]);
+
+      // Sanity-check against buildReview: both rows are genuinely ambiguous against {A,B}.
+      const review = await reviewService.buildReview(userId, id);
+      expect(review.rows[0].kind).toBe('ambiguous');
+      expect(review.rows[1].kind).toBe('ambiguous');
+
+      // With the bug, row 0's force wrongly excludes BOTH A and B, so row 1 (re-run through
+      // findMatch with those ids excluded) sees no candidates at all -> kind 'new' -> the
+      // force action on it is rejected -> the whole batch rolls back.
+      await confirmService.confirmReview(userId, id, [{ index: 0, action: 'force' }, { index: 1, action: 'force' }]);
+
+      const { rows: newRows } = await pool.query(
+        'SELECT * FROM transactions WHERE account_id = $1 AND id NOT IN ($2, $3)',
+        [account.id, olderCandidate.id, closerCandidate.id]
+      );
+      expect(newRows).toHaveLength(2); // both forced rows landed — the batch was not wrongly rejected
+
+      const { rows: sources } = await pool.query(
+        'SELECT overridden_candidate_id FROM transaction_sources WHERE transaction_id = ANY($1::uuid[])',
+        [newRows.map((t) => t.id)]
+      );
+      expect(sources).toHaveLength(2);
+      // Same statement date for both rows -> same candidate set -> same highest-confidence id
+      // (closerCandidate, same-day) recorded for both, from each row's own original candidate set.
+      for (const source of sources) {
+        expect(source.overridden_candidate_id).toBe(closerCandidate.id);
+      }
+
+      const { rows: [afterOlder] } = await pool.query('SELECT reconciliation_status FROM transactions WHERE id = $1', [olderCandidate.id]);
+      const { rows: [afterCloser] } = await pool.query('SELECT reconciliation_status FROM transactions WHERE id = $1', [closerCandidate.id]);
+      expect(afterOlder.reconciliation_status).toBe('unconfirmed'); // untouched, not accidentally corroborated
+      expect(afterCloser.reconciliation_status).toBe('unconfirmed');
+    });
+
+    test('partial candidate overlap {A,B} vs {B,C}: forcing row 0 only must not silently auto-corroborate C via row 1', async () => {
+      await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-01', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-07', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      const candidateC = await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-13', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      const id = await seedReadyForReview(userId, account.id, [
+        { date: '2026-01-04', description: 'Target', amount: -48.23 }, // ambiguous vs {A,B} (both within ±5 days)
+        { date: '2026-01-10', description: 'Target', amount: -48.23 }, // ambiguous vs {B,C} (A is 9 days away — out of window)
+      ]);
+
+      const review = await reviewService.buildReview(userId, id);
+      expect(review.rows[0].kind).toBe('ambiguous');
+      expect(review.rows[1].kind).toBe('ambiguous');
+
+      // Force row 0 only; leave row 1 with no selection entry at all. With the bug, row 0's
+      // force wrongly excludes B, so row 1's own findMatch call only sees C — a single
+      // candidate — which reclassifies as 'corroborate' and is applied unconditionally
+      // (the corroborate branch runs even with no selection), silently confirming C.
+      await confirmService.confirmReview(userId, id, [{ index: 0, action: 'force' }]);
+
+      const { rows: [afterC] } = await pool.query('SELECT reconciliation_status FROM transactions WHERE id = $1', [candidateC.id]);
+      expect(afterC.reconciliation_status).toBe('unconfirmed'); // NOT silently auto-corroborated by row 1
+    });
+
+    test('same partial-overlap setup, forcing BOTH rows: exactly 5 transactions exist (3 originals + 2 forced inserts), balance reflects both', async () => {
+      await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-01', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-07', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      await transactionsService.createTransactionFromChat(userId, { accountId: account.id, transactionDate: '2026-01-13', amount: 48.23, merchantRaw: 'Target', type: 'debit', reconciliationStatus: 'unconfirmed' });
+      const id = await seedReadyForReview(userId, account.id, [
+        { date: '2026-01-04', description: 'Target', amount: -48.23 },
+        { date: '2026-01-10', description: 'Target', amount: -48.23 },
+      ]);
+
+      const balanceBefore = await balanceOf(account.id);
+
+      await confirmService.confirmReview(userId, id, [{ index: 0, action: 'force' }, { index: 1, action: 'force' }]);
+
+      const { rows: all } = await pool.query('SELECT * FROM transactions WHERE account_id = $1', [account.id]);
+      // 3 pre-existing candidates (unchanged) + 2 newly-forced inserts — neither forced insert
+      // was silently dropped by a mid-batch rejection or a mis-classification.
+      expect(all).toHaveLength(5);
+      expect(await balanceOf(account.id)).toBeCloseTo(balanceBefore - 96.46, 5);
+    });
+  });
 });

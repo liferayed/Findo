@@ -107,13 +107,15 @@ function createStatementConfirmService({ pool, transactionsService }) {
           if (match.candidate) {
             overriddenCandidateId = match.candidate.id;
           } else if (match.candidates) {
-            const sorted = match.candidates.slice().sort((a, b) => b.confidence - a.confidence);
+            // Deterministic tie-break: Array.prototype.sort does not guarantee a stable "first"
+            // pick across engines when the comparator returns 0 for equal-confidence candidates,
+            // so prefer the lower id on a tie. Do NOT exclude the other tied candidates here —
+            // statementReviewService.buildReview never excludes ambiguous candidates at all, so
+            // doing so here would make confirm diverge from what review showed the user and
+            // could reject a later row's own force, or silently reclassify it.
+            const sorted = match.candidates.slice()
+              .sort((a, b) => b.confidence - a.confidence || a.candidate.id.localeCompare(b.candidate.id));
             overriddenCandidateId = sorted[0].candidate.id;
-            // Safer choice: exclude ALL tied candidates, not just the recorded one, so a later
-            // row in this batch can't claim any of them either.
-            for (const tied of sorted) {
-              excludeIds.push(tied.candidate.id);
-            }
           }
         }
         const transaction = await transactionsService.createTransactionFromStatement(
