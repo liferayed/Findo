@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 
 const POLL_INTERVAL_MS = 3000;
 const ACTIVE_STATUSES = new Set(['pending', 'processing']);
@@ -39,15 +38,13 @@ export function useStatementStatus(sharedItemId: string | null): StatementStatus
         }
         const body = await res.json();
         if (cancelled) return;
-        flushSync(() => setState({ status: body.status, page: body.page, totalPages: body.totalPages, error: null }));
+        setState({ status: body.status, page: body.page, totalPages: body.totalPages, error: null });
         if (ACTIVE_STATUSES.has(body.status) || body.status === null || body.status === undefined) {
           timeoutRef.current = setTimeout(poll, POLL_INTERVAL_MS);
         }
       } catch (err) {
         if (cancelled) return;
-        flushSync(() =>
-          setState((prev) => ({ ...prev, error: err instanceof Error ? err.message : 'status check failed' })),
-        );
+        setState((prev) => ({ ...prev, error: err instanceof Error ? err.message : 'status check failed' }));
       }
     }
 

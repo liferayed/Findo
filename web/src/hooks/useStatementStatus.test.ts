@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useStatementStatus } from './useStatementStatus';
 
@@ -30,12 +30,18 @@ describe('useStatementStatus', () => {
     await vi.waitFor(() => expect(result.current.status).toBe('processing'));
     expect(fetchMock).toHaveBeenCalledWith('/documents/s1/status');
 
-    await vi.advanceTimersByTimeAsync(3000);
-    await vi.advanceTimersByTimeAsync(3000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
     expect(result.current.status).toBe('ready_for_review');
     expect(fetchMock).toHaveBeenCalledTimes(3);
 
-    await vi.advanceTimersByTimeAsync(6000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
     expect(fetchMock).toHaveBeenCalledTimes(3); // no more polls once settled
   });
 
@@ -45,7 +51,9 @@ describe('useStatementStatus', () => {
     vi.stubGlobal('fetch', fetchMock);
     const { result } = renderHook(() => useStatementStatus('s1'));
     await vi.waitFor(() => expect(result.current.error).not.toBeNull());
-    await vi.advanceTimersByTimeAsync(6000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
