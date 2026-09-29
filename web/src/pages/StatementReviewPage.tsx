@@ -31,10 +31,15 @@ const KIND_BADGE: Record<ReviewRow['kind'], { label: string; tone: 'success' | '
   ambiguous: { label: 'Ambiguous', tone: 'danger' },
 };
 
+type Tag = { reason: 'tip' | 'tax' | 'fee' | 'other'; note: string };
+
 export function StatementReviewPage() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<ReviewResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [checked, setChecked] = useState<Record<number, boolean>>({});
+  const [tags, setTags] = useState<Record<number, Tag>>({});
+  const [openPopoverIndex, setOpenPopoverIndex] = useState<number | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -47,6 +52,32 @@ export function StatementReviewPage() {
       setData(await res.json());
     })();
   }, [id]);
+
+  useEffect(() => {
+    if (!data) return;
+    const initial: Record<number, boolean> = {};
+    data.rows.forEach((r) => {
+      if (r.kind === 'new') initial[r.index] = true;
+    });
+    setChecked(initial);
+  }, [data]);
+
+  function toggleRow(row: ReviewRow) {
+    if (row.kind === 'possible') {
+      if (checked[row.index]) {
+        setChecked((c) => ({ ...c, [row.index]: false }));
+        setTags((t) => {
+          const next = { ...t };
+          delete next[row.index];
+          return next;
+        });
+      } else {
+        setOpenPopoverIndex(row.index);
+      }
+      return;
+    }
+    setChecked((c) => ({ ...c, [row.index]: !c[row.index] }));
+  }
 
   const visibleRows = data?.rows.filter((r) => r.kind !== 'corroborate') ?? [];
   const mergedCount = (data?.rows.length ?? 0) - visibleRows.length;
@@ -93,7 +124,12 @@ export function StatementReviewPage() {
               {visibleRows.map((row) => (
                 <tr key={row.index} className="border-b border-stone-100 last:border-0">
                   <td className="px-4 py-3">
-                    <input type="checkbox" defaultChecked={row.kind === 'new'} aria-label={`Save row ${row.index}`} />
+                    <input
+                      type="checkbox"
+                      checked={Boolean(checked[row.index])}
+                      onChange={() => toggleRow(row)}
+                      aria-label={`Save row ${row.index}`}
+                    />
                   </td>
                   <td className="px-4 py-3">{row.date}</td>
                   <td className="px-4 py-3">{row.merchant}</td>
@@ -107,6 +143,84 @@ export function StatementReviewPage() {
           </table>
         )}
       </Card>
+
+      {openPopoverIndex !== null && data && (
+        <TagPopover
+          row={data.rows.find((r) => r.index === openPopoverIndex)!}
+          onCancel={() => setOpenPopoverIndex(null)}
+          onConfirm={(tag) => {
+            setTags((t) => ({ ...t, [openPopoverIndex]: tag }));
+            setChecked((c) => ({ ...c, [openPopoverIndex]: true }));
+            setOpenPopoverIndex(null);
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function TagPopover({
+  row,
+  onCancel,
+  onConfirm,
+}: {
+  row: ReviewRow;
+  onCancel: () => void;
+  onConfirm: (tag: Tag) => void;
+}) {
+  const [reason, setReason] = useState<Tag['reason'] | ''>('');
+  const [note, setNote] = useState('');
+  const statementAmount = Math.abs(row.amount);
+  const receiptAmount = Math.abs(row.amount - (row.difference ?? 0));
+  const canConfirm = reason !== '' && (reason !== 'other' || note.trim() !== '');
+
+  return (
+    <div className="mt-3 max-w-sm rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
+      <p className="mb-2 text-stone-700">
+        Receipt: ${receiptAmount.toFixed(2)} → Statement: ${statementAmount.toFixed(2)}
+      </p>
+      <label htmlFor="tag-reason" className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-stone-500">
+        Reason
+      </label>
+      <select
+        id="tag-reason"
+        className="mb-2 w-full rounded-md border border-stone-200 bg-white px-2 py-1 text-sm"
+        value={reason}
+        onChange={(e) => setReason(e.target.value as Tag['reason'])}
+      >
+        <option value="" disabled>
+          Select…
+        </option>
+        <option value="tip">Tip</option>
+        <option value="tax">Tax</option>
+        <option value="fee">Fee</option>
+        <option value="other">Other</option>
+      </select>
+      {reason === 'other' && (
+        <>
+          <label htmlFor="tag-note" className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-stone-500">
+            Note
+          </label>
+          <input
+            id="tag-note"
+            className="mb-2 w-full rounded-md border border-stone-200 bg-white px-2 py-1 text-sm"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </>
+      )}
+      <div className="mt-2 flex justify-end gap-2">
+        <button className="text-xs font-semibold text-stone-500" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          className="rounded-md bg-emerald-800 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+          disabled={!canConfirm}
+          onClick={() => onConfirm({ reason: reason as Tag['reason'], note })}
+        >
+          Confirm
+        </button>
+      </div>
+    </div>
   );
 }

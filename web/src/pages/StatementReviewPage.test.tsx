@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '../components/ui/ToastProvider';
@@ -71,5 +71,67 @@ describe('StatementReviewPage', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 400, json: async () => ({ error: 'not ready' }) }));
     renderPage();
     await waitFor(() => expect(screen.getByText('not ready')).toBeInTheDocument());
+  });
+
+  it('checking a possible row opens a tag popover; canceling leaves it unchecked', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          accountId: 'a1',
+          rows: [{ index: 0, date: '2026-01-14', merchant: 'Target', amount: -50.4, kind: 'possible', candidate: { id: 'c1' }, confidence: 0.8, difference: -8.4 }],
+          balanceMismatch: null,
+        }),
+      }),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Target')).toBeInTheDocument());
+    const checkbox = screen.getByLabelText('Save row 0') as HTMLInputElement;
+    fireEvent.click(checkbox);
+    expect(screen.getByText(/receipt.*\$42\.00.*statement.*\$50\.40/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it('confirming the popover with tip checks the row', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          accountId: 'a1',
+          rows: [{ index: 0, date: '2026-01-14', merchant: 'Target', amount: -50.4, kind: 'possible', candidate: { id: 'c1' }, confidence: 0.8, difference: -8.4 }],
+          balanceMismatch: null,
+        }),
+      }),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Target')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Save row 0'));
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: 'tip' } });
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
+    expect((screen.getByLabelText('Save row 0') as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('other requires a note before the popover confirm button is enabled', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          accountId: 'a1',
+          rows: [{ index: 0, date: '2026-01-14', merchant: 'Target', amount: -50.4, kind: 'possible', candidate: { id: 'c1' }, confidence: 0.8, difference: -8.4 }],
+          balanceMismatch: null,
+        }),
+      }),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Target')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Save row 0'));
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: 'other' } });
+    expect(screen.getByRole('button', { name: /confirm/i })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/note/i), { target: { value: 'valet parking' } });
+    expect(screen.getByRole('button', { name: /confirm/i })).not.toBeDisabled();
   });
 });
