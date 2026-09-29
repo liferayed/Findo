@@ -72,6 +72,12 @@ function createStatementConfirmService({ pool, transactionsService }) {
           if (!selection) {
             continue;
           }
+          // A declined statement has no resolved account to match against, so there is no
+          // possible/duplicate/ambiguous match kind to validate an action against (unlike the
+          // resolved-account branch below) — 'new' is the only valid action here.
+          if (selection.action !== 'new') {
+            throw new ValidationError(['only the new action is valid for a declined statement']);
+          }
           if (!selection.accountId) {
             throw new ValidationError(['each checked row on a declined statement needs an account']);
           }
