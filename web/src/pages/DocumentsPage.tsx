@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -7,6 +8,7 @@ import { ErrorBanner } from '../components/ui/ErrorBanner';
 import { FilterBar } from '../components/ui/FilterBar';
 import { Modal } from '../components/ui/Modal';
 import { useToast } from '../components/ui/ToastProvider';
+import { useStatementStatus } from '../hooks/useStatementStatus';
 
 type Account = { id: string; nickname: string };
 
@@ -24,10 +26,15 @@ type HistoryRow = {
   received_at: string;
   channel: string;
   parse_status: string;
+  document_type: string;
+  status: string;
+  transaction_count: number;
   account_nickname: string | null;
-  transaction_merchant_raw: string | null;
-  transaction_amount: string | null;
+  transaction_merchant_raw?: string | null;
+  transaction_amount?: string | null;
 };
+
+type AccountOffer = { institutionName: string | null; accountTypeText: string | null; lastFour: string | null; suggestedType: 'credit_card' | null };
 
 type Stage =
   | { name: 'idle' }
@@ -35,7 +42,9 @@ type Stage =
   | { name: 'clarify'; extract: ExtractResult }
   | { name: 'confirm'; extract: ExtractResult; accountId: string; wasDetected: boolean }
   | { name: 'manual'; fileRef: string; originalFilename: string }
-  | { name: 'failed'; extract: ExtractResult };
+  | { name: 'failed'; extract: ExtractResult }
+  | { name: 'statement-processing'; sharedItemId: string }
+  | { name: 'account-offer'; sharedItemId: string; offer: AccountOffer };
 
 const inputClass =
   'w-full rounded-md border border-stone-200 bg-white px-3 py-1.5 text-sm text-stone-900 ' +
@@ -47,7 +56,23 @@ function isoDateDaysAgo(days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-async function parseErrorMessage(res: Response): Promise<string> {
+function statusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    pending: 'Processing', processing: 'Processing', needs_account: 'Needs Account',
+    ready_for_review: 'Ready for Review', confirmed: 'Confirmed', failed: 'Unreadable',
+    parsed: 'Parsed', needs_clarification: 'Needs Info',
+  };
+  return labels[status] ?? status;
+}
+
+function statusTone(status: string): 'success' | 'warning' | 'muted' | 'danger' {
+  if (status === 'confirmed' || status === 'parsed') return 'success';
+  if (status === 'failed') return 'danger';
+  if (status === 'needs_account' || status === 'ready_for_review' || status === 'needs_clarification') return 'warning';
+  return 'muted';
+}
+
+export async function parseErrorMessage(res: Response): Promise<string> {
   const body = await res.json().catch(() => ({}));
   if (Array.isArray(body.errors)) return body.errors.join(', ');
   if (typeof body.error === 'string') return body.error;
@@ -61,6 +86,10 @@ export function DocumentsPage() {
   const [file, setFile] = useState<File | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [filter, setFilter] = useState({ from: isoDateDaysAgo(30), to: isoDateDaysAgo(0), accountId: null as string | null, allTime: false });
+  const [isFullStatement, setIsFullStatement] = useState(false);
+  const navigate = useNavigate();
+  const [statementId, setStatementId] = useState<string | null>(null);
+  const statementStatus = useStatementStatus(statementId);
 
   async function loadAccounts() {
     const res = await fetch('/accounts');
@@ -86,18 +115,67 @@ export function DocumentsPage() {
     loadHistory();
   }, [filter]);
 
-  const modalOpen = stage.name === 'clarify' || stage.name === 'confirm' || stage.name === 'manual' || stage.name === 'failed';
+  useEffect(() => {
+    if (!statementId) return;
+    if (statementStatus.status === 'ready_for_review') {
+      setStatementId(null);
+      navigate(`/documents/${statementId}/review`);
+    } else if (statementStatus.status === 'needs_account') {
+      loadAccountOffer(statementId);
+    } else if (statementStatus.status === 'failed') {
+      setStage({ name: 'idle' });
+      setStatementId(null);
+      showToast("Couldn't read this statement — try a clearer file.", 'error');
+    } else if (statementStatus.error) {
+      setStage({ name: 'idle' });
+      setStatementId(null);
+      showToast(statementStatus.error, 'error');
+    } else if (statementStatus.status === 'processing' || statementStatus.status === 'pending') {
+      setStage({ name: 'statement-processing', sharedItemId: statementId });
+    }
+    // navigate is stable from useNavigate(); statementId/showToast intentionally omitted from
+    // deps beyond what's read here to avoid re-triggering navigation on every render. (The
+    // react-hooks plugin isn't registered in this repo's eslint config, so there's no
+    // exhaustive-deps rule to suppress here — this comment records the reasoning instead.)
+  }, [statementStatus.status, statementStatus.error]);
+
+  async function loadAccountOffer(sharedItemId: string) {
+    const res = await fetch(`/documents/${sharedItemId}/account-offer`);
+    if (!res.ok) {
+      showToast("Couldn't load account details for this statement.", 'error');
+      setStage({ name: 'idle' });
+      return;
+    }
+    const offer: AccountOffer = await res.json();
+    setStage({ name: 'account-offer', sharedItemId, offer });
+  }
+
+  function isStatementFile(f: File): boolean {
+    return f.type === 'application/pdf' || isFullStatement;
+  }
+
+  const modalOpen =
+    stage.name === 'clarify' ||
+    stage.name === 'confirm' ||
+    stage.name === 'manual' ||
+    stage.name === 'failed' ||
+    stage.name === 'statement-processing' ||
+    stage.name === 'account-offer';
 
   async function handleUpload() {
     if (!file) return;
     setStage({ name: 'processing' });
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('channel', 'web_upload');
+
+    const statementUpload = isStatementFile(file);
+    if (!statementUpload) {
+      formData.append('channel', 'web_upload');
+    }
 
     let res: Response;
     try {
-      res = await fetch('/documents/extract', { method: 'POST', body: formData });
+      res = await fetch(statementUpload ? '/documents/statements' : '/documents/extract', { method: 'POST', body: formData });
     } catch {
       setStage({ name: 'idle' });
       showToast("Couldn't upload the file — check your connection and try again.", 'error');
@@ -108,9 +186,16 @@ export function DocumentsPage() {
       showToast("Couldn't upload the file — check your connection and try again.", 'error');
       return;
     }
-    const result: ExtractResult = await res.json();
     setFile(null);
 
+    if (statementUpload) {
+      const { shared_item_id } = await res.json();
+      setStatementId(shared_item_id);
+      setStage({ name: 'statement-processing', sharedItemId: shared_item_id });
+      return;
+    }
+
+    const result: ExtractResult = await res.json();
     if (!result.is_readable) {
       setStage({ name: 'failed', extract: result });
     } else if (result.detected_account_id) {
@@ -175,7 +260,7 @@ export function DocumentsPage() {
           Choose File
           <input
             type="file"
-            accept="image/jpeg,image/png"
+            accept="image/jpeg,image/png,application/pdf"
             aria-label="Choose File"
             className="hidden"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
@@ -184,6 +269,17 @@ export function DocumentsPage() {
         <Button className="ml-2" disabled={!file || stage.name === 'processing'} onClick={handleUpload}>
           {stage.name === 'processing' ? 'Reading…' : 'Upload'}
         </Button>
+        <div className="mt-3 flex items-center justify-center gap-1.5">
+          <input
+            type="checkbox"
+            id="full-statement-toggle"
+            checked={isFullStatement}
+            onChange={(e) => setIsFullStatement(e.target.checked)}
+          />
+          <label htmlFor="full-statement-toggle" className="text-xs text-stone-500">
+            This is a full statement, not a receipt
+          </label>
+        </div>
       </Card>
 
       {!modalOpen && (
@@ -211,12 +307,32 @@ export function DocumentsPage() {
                       <td className="px-4 py-3 text-stone-600">{row.channel === 'chat' ? 'Chat' : 'Web'}</td>
                       <td className="px-4 py-3 text-stone-600">{row.account_nickname ?? '—'}</td>
                       <td className="px-4 py-3">
-                        <Badge tone={row.parse_status === 'parsed' ? 'success' : row.parse_status === 'failed' ? 'danger' : 'muted'}>
-                          {row.parse_status === 'parsed' ? 'Parsed' : row.parse_status === 'failed' ? 'Unreadable' : 'Processing'}
-                        </Badge>
+                        <Badge tone={statusTone(row.status)}>{statusLabel(row.status)}</Badge>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {row.transaction_merchant_raw ? `$${Math.abs(Number(row.transaction_amount)).toFixed(2)} · ${row.transaction_merchant_raw}` : '—'}
+                        {row.document_type === 'receipt'
+                          ? row.transaction_merchant_raw
+                            ? `$${Math.abs(Number(row.transaction_amount)).toFixed(2)} · ${row.transaction_merchant_raw}`
+                            : '—'
+                          : row.transaction_count > 0
+                            ? `${row.transaction_count} transaction${row.transaction_count > 1 ? 's' : ''}`
+                            : '—'}
+                        {row.document_type !== 'receipt' && row.status === 'ready_for_review' && (
+                          <a href={`/documents/${row.id}/review`} className="ml-2 font-semibold text-emerald-800 hover:underline">
+                            Review
+                          </a>
+                        )}
+                        {row.document_type !== 'receipt' && row.status === 'needs_account' && (
+                          <button
+                            className="ml-2 font-semibold text-emerald-800 hover:underline"
+                            onClick={() => {
+                              setStatementId(row.id);
+                              loadAccountOffer(row.id);
+                            }}
+                          >
+                            Resolve Account
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -294,6 +410,42 @@ export function DocumentsPage() {
           title="Enter transaction details"
           onClose={() => setStage({ name: 'idle' })}
           onSubmit={submitConfirm}
+        />
+      )}
+
+      {stage.name === 'statement-processing' && (
+        <Modal
+          title="Reading your statement"
+          onClose={() => {
+            setStatementId(null);
+            setStage({ name: 'idle' });
+          }}
+        >
+          <p className="text-sm text-stone-600">
+            {statementStatus.page && statementStatus.totalPages
+              ? `Page ${statementStatus.page} of ${statementStatus.totalPages}…`
+              : 'Starting up…'}
+          </p>
+          <p className="mt-1.5 text-xs text-stone-400">This can take a few minutes for longer statements.</p>
+        </Modal>
+      )}
+
+      {stage.name === 'account-offer' && (
+        <AccountOfferForm
+          sharedItemId={stage.sharedItemId}
+          offer={stage.offer}
+          onClose={() => {
+            setStatementId(null);
+            setStage({ name: 'idle' });
+          }}
+          onCreated={() => {
+            setStatementId(null);
+            navigate(`/documents/${stage.sharedItemId}/review`);
+          }}
+          onDeclined={() => {
+            setStatementId(null);
+            navigate(`/documents/${stage.sharedItemId}/review`);
+          }}
         />
       )}
     </section>
@@ -486,6 +638,128 @@ function ConfirmForm({
         </Button>
         <Button onClick={handleSubmit} disabled={saving || !accountId || !merchant || !amount || !transactionDate}>
           {saving ? 'Saving…' : itemsEditable ? 'Save Transaction' : 'Confirm & Save'}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+const ACCOUNT_TYPES = ['checking', 'savings', 'credit_card', 'brokerage', 'loan'];
+
+function AccountOfferForm({
+  sharedItemId,
+  offer,
+  onClose,
+  onCreated,
+  onDeclined,
+}: {
+  sharedItemId: string;
+  offer: AccountOffer;
+  onClose: () => void;
+  onCreated: () => void;
+  onDeclined: () => void;
+}) {
+  const [type, setType] = useState(offer.suggestedType ?? '');
+  const [nickname, setNickname] = useState(
+    `${offer.institutionName ?? 'Account'} ${offer.accountTypeText ?? ''}`.trim(),
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function handleCreate() {
+    setSaving(true);
+    setError(null);
+    let res: Response;
+    try {
+      res = await fetch(`/documents/${sharedItemId}/account-offer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accept: true, type, nickname }),
+      });
+    } catch {
+      setError("Couldn't reach the server. Try again.");
+      setSaving(false);
+      return;
+    }
+    if (!res.ok) {
+      setError(await parseErrorMessage(res));
+      setSaving(false);
+      return;
+    }
+    onCreated();
+  }
+
+  async function handleDecline() {
+    setSaving(true);
+    setError(null);
+    let res: Response;
+    try {
+      res = await fetch(`/documents/${sharedItemId}/account-offer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accept: false }),
+      });
+    } catch {
+      setError("Couldn't reach the server. Try again.");
+      setSaving(false);
+      return;
+    }
+    if (!res.ok) {
+      setError(await parseErrorMessage(res));
+      setSaving(false);
+      return;
+    }
+    onDeclined();
+  }
+
+  return (
+    <Modal
+      title="No matching account"
+      subtitle={`We found a ${offer.institutionName ?? 'statement'}${offer.lastFour ? ` ending in ${offer.lastFour}` : ''} that doesn't match any account on file.`}
+      onClose={onClose}
+    >
+      {error && <ErrorBanner>{error}</ErrorBanner>}
+      <div className="mb-3">
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-stone-400">Institution</label>
+        <input className={inputClass} value={offer.institutionName ?? ''} disabled />
+      </div>
+      <div className="mb-3">
+        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-stone-400">Nickname</label>
+        <input className={inputClass} value={nickname} onChange={(e) => setNickname(e.target.value)} />
+      </div>
+      <div className="mb-3">
+        <label htmlFor="account-offer-type" className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+          Account type
+        </label>
+        {offer.suggestedType ? (
+          <input className={inputClass} value="Credit Card" disabled />
+        ) : (
+          <select id="account-offer-type" className={inputClass} value={type} onChange={(e) => setType(e.target.value)}>
+            <option value="" disabled>
+              Select a type…
+            </option>
+            {ACCOUNT_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t.replace('_', ' ')}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      <p className="mb-3 text-[10px] text-stone-400">
+        You'll need to create an account to continue reviewing this statement.
+      </p>
+      <div className="mt-4 flex justify-between gap-2">
+        <button
+          type="button"
+          className="text-xs font-semibold text-stone-500 hover:text-stone-700"
+          onClick={handleDecline}
+          disabled={saving}
+        >
+          I'll assign accounts myself
+        </button>
+        <Button onClick={handleCreate} disabled={saving || !nickname || !type}>
+          {saving ? 'Creating…' : 'Create Account'}
         </Button>
       </div>
     </Modal>
