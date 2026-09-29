@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ErrorBanner } from '../components/ui/ErrorBanner';
+import { useToast } from '../components/ui/ToastProvider';
 import { parseErrorMessage } from './DocumentsPage';
 
 type ReviewRow = {
@@ -35,11 +37,15 @@ type Tag = { reason: 'tip' | 'tax' | 'fee' | 'other'; note: string };
 
 export function StatementReviewPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { showToast } = useToast();
   const [data, setData] = useState<ReviewResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState<Record<number, boolean>>({});
   const [tags, setTags] = useState<Record<number, Tag>>({});
   const [openPopoverIndex, setOpenPopoverIndex] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -81,6 +87,45 @@ export function StatementReviewPage() {
 
   const visibleRows = data?.rows.filter((r) => r.kind !== 'corroborate') ?? [];
   const mergedCount = (data?.rows.length ?? 0) - visibleRows.length;
+
+  function buildSelections() {
+    if (!data) return [];
+    return data.rows
+      .filter((r) => r.kind !== 'corroborate' && checked[r.index])
+      .map((r) => {
+        if (r.kind === 'new') return { index: r.index, action: 'new' as const };
+        if (r.kind === 'possible') {
+          const tag = tags[r.index];
+          return { index: r.index, action: 'tag' as const, adjustmentReason: tag?.reason, adjustmentNote: tag?.note ?? '' };
+        }
+        return { index: r.index, action: 'force' as const };
+      });
+  }
+
+  async function handleConfirm() {
+    if (!id) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    let res: Response;
+    try {
+      res = await fetch(`/documents/${id}/confirm-review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selections: buildSelections() }),
+      });
+    } catch {
+      setSubmitError("Couldn't reach the server. Try again.");
+      setSubmitting(false);
+      return;
+    }
+    if (!res.ok) {
+      setSubmitError(await parseErrorMessage(res));
+      setSubmitting(false);
+      return;
+    }
+    showToast('Statement confirmed and saved.');
+    navigate('/documents');
+  }
 
   return (
     <section>
@@ -155,6 +200,15 @@ export function StatementReviewPage() {
             setOpenPopoverIndex(null);
           }}
         />
+      )}
+
+      {submitError && <ErrorBanner>{submitError}</ErrorBanner>}
+      {visibleRows.length > 0 && openPopoverIndex === null && (
+        <div className="mt-4 flex justify-end">
+          <Button onClick={handleConfirm} disabled={submitting}>
+            {submitting ? 'Saving…' : `Confirm & Save ${Object.values(checked).filter(Boolean).length} Transactions`}
+          </Button>
+        </div>
       )}
     </section>
   );

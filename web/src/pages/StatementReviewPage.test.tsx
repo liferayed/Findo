@@ -164,4 +164,130 @@ describe('StatementReviewPage', () => {
     expect((screen.getByLabelText(/reason/i) as HTMLSelectElement).value).toBe('');
     expect(screen.getByRole('button', { name: /confirm/i })).toBeDisabled();
   });
+
+  it('Confirm & Save sends the right selections and navigates away on success', async () => {
+    const fetchMock = vi.fn((url: string, opts?: RequestInit) => {
+      if (url === '/documents/stmt-1/review') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            accountId: 'a1',
+            rows: [
+              { index: 0, date: '2026-01-14', merchant: 'Target', amount: -48.23, kind: 'new' },
+              { index: 1, date: '2026-01-15', merchant: 'Shell Oil', amount: -30, kind: 'duplicate', candidate: { id: 'c1' } },
+            ],
+            balanceMismatch: null,
+          }),
+        });
+      }
+      if (url === '/documents/stmt-1/confirm-review' && opts?.method === 'POST') {
+        return Promise.resolve({ ok: true, json: async () => ({ ok: true }) });
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/documents/stmt-1/review']}>
+        <ToastProvider>
+          <Routes>
+            <Route path="/documents/:id/review" element={<StatementReviewPage />} />
+            <Route path="/documents" element={<div>Documents Page Stub</div>} />
+          </Routes>
+        </ToastProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText('Target')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText('Save row 1')); // force the duplicate
+
+    fireEvent.click(screen.getByRole('button', { name: /confirm & save 2/i }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/documents/stmt-1/confirm-review',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            selections: [
+              { index: 0, action: 'new' },
+              { index: 1, action: 'force' },
+            ],
+          }),
+        }),
+      ),
+    );
+    await waitFor(() => expect(screen.getByText('Documents Page Stub')).toBeInTheDocument());
+  });
+
+  it('a tagged possible row is included with its reason and note', async () => {
+    const fetchMock = vi.fn((url: string, opts?: RequestInit) => {
+      if (url === '/documents/stmt-2/review') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            accountId: 'a1',
+            rows: [{ index: 0, date: '2026-01-14', merchant: 'Target', amount: -50.4, kind: 'possible', candidate: { id: 'c1' }, difference: -8.4 }],
+            balanceMismatch: null,
+          }),
+        });
+      }
+      if (url === '/documents/stmt-2/confirm-review') return Promise.resolve({ ok: true, json: async () => ({ ok: true }) });
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/documents/stmt-2/review']}>
+        <ToastProvider>
+          <Routes>
+            <Route path="/documents/:id/review" element={<StatementReviewPage />} />
+            <Route path="/documents" element={<div>Documents Page Stub</div>} />
+          </Routes>
+        </ToastProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText('Target')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('Save row 0'));
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: 'fee' } });
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
+    fireEvent.click(screen.getByRole('button', { name: /confirm & save 1/i }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/documents/stmt-2/confirm-review',
+        expect.objectContaining({
+          body: JSON.stringify({ selections: [{ index: 0, action: 'tag', adjustmentReason: 'fee', adjustmentNote: '' }] }),
+        }),
+      ),
+    );
+  });
+
+  it('shows an error and stays on the page if confirm-review fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url === '/documents/stmt-3/review') {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ accountId: 'a1', rows: [{ index: 0, date: '2026-01-14', merchant: 'Target', amount: -48.23, kind: 'new' }], balanceMismatch: null }),
+          });
+        }
+        return Promise.resolve({ ok: false, status: 400, json: async () => ({ error: 'this statement has already been confirmed' }) });
+      }),
+    );
+    render(
+      <MemoryRouter initialEntries={['/documents/stmt-3/review']}>
+        <ToastProvider>
+          <Routes>
+            <Route path="/documents/:id/review" element={<StatementReviewPage />} />
+          </Routes>
+        </ToastProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText('Target')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /confirm & save 1/i }));
+    await waitFor(() => expect(screen.getByText('this statement has already been confirmed')).toBeInTheDocument());
+    expect(screen.getByText('Target')).toBeInTheDocument(); // still on the page
+  });
 });
