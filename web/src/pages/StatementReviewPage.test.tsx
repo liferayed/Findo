@@ -134,4 +134,34 @@ describe('StatementReviewPage', () => {
     fireEvent.change(screen.getByLabelText(/note/i), { target: { value: 'valet parking' } });
     expect(screen.getByRole('button', { name: /confirm/i })).not.toBeDisabled();
   });
+
+  it('switching from one possible row to another resets the popover state instead of leaking it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          accountId: 'a1',
+          rows: [
+            { index: 0, date: '2026-01-14', merchant: 'Target', amount: -50.4, kind: 'possible', candidate: { id: 'c1' }, confidence: 0.8, difference: -8.4 },
+            { index: 1, date: '2026-01-15', merchant: 'Costco', amount: -20, kind: 'possible', candidate: { id: 'c2' }, confidence: 0.8, difference: -5 },
+          ],
+          balanceMismatch: null,
+        }),
+      }),
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Target')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText('Save row 0'));
+    fireEvent.change(screen.getByLabelText(/reason/i), { target: { value: 'other' } });
+    fireEvent.change(screen.getByLabelText(/note/i), { target: { value: 'valet parking' } });
+    expect(screen.getByRole('button', { name: /confirm/i })).not.toBeDisabled();
+
+    // Switch to row 1's checkbox without canceling or confirming row 0's popover.
+    fireEvent.click(screen.getByLabelText('Save row 1'));
+
+    expect((screen.getByLabelText(/reason/i) as HTMLSelectElement).value).toBe('');
+    expect(screen.getByRole('button', { name: /confirm/i })).toBeDisabled();
+  });
 });

@@ -146,6 +146,7 @@ export function StatementReviewPage() {
 
       {openPopoverIndex !== null && data && (
         <TagPopover
+          key={openPopoverIndex}
           row={data.rows.find((r) => r.index === openPopoverIndex)!}
           onCancel={() => setOpenPopoverIndex(null)}
           onConfirm={(tag) => {
