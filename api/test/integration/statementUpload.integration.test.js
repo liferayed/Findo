@@ -124,7 +124,7 @@ describe('statement upload + status endpoints (against real Postgres/Redis)', ()
     );
     await pool.query(
       `INSERT INTO documents (shared_item_id, document_type, extracted_data) VALUES ($1, 'bank_statement', $2)`,
-      [sharedItem.id, JSON.stringify({ resolvedAccountId: 'a1', confirmedAt: new Date().toISOString() })]
+      [sharedItem.id, JSON.stringify({ resolvedAccountId: '11111111-1111-1111-1111-111111111111', confirmedAt: new Date().toISOString() })]
     );
     const res = await request(app).get(`/documents/${sharedItem.id}/status`);
     expect(res.body.status).toBe('confirmed');

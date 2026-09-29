@@ -81,6 +81,12 @@ function createStatementConfirmService({ pool, transactionsService }) {
           if (!selection.accountId) {
             throw new ValidationError(['each checked row on a declined statement needs an account']);
           }
+          // Untrusted client input — a non-UUID string would otherwise reach findOwnedAccount's
+          // plain SQL query and make Postgres throw its own (code 22P02, no .statusCode), which
+          // the route would re-throw as an unhandled 500 instead of a clean 400.
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(selection.accountId)) {
+            throw new ValidationError(['accountId must be a valid id']);
+          }
           const row = data.transactions[index];
           const transaction = await transactionsService.createTransactionFromStatement(
             userId, { accountId: selection.accountId, transactionDate: row.date, amount: row.amount, merchantRaw: row.description }, { client }

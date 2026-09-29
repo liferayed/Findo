@@ -537,6 +537,18 @@ describe('statement confirm service (against real Postgres)', () => {
       expect(await balanceOf(accountA.id)).toBe(balanceBefore);
     });
 
+    test('a malformed accountId on a declined statement is rejected with a clean ValidationError, not a 500', async () => {
+      const id = await seedReadyForReview(userId, null, {
+        resolvedAccountId: null, accountOfferDeclined: true,
+        transactions: [{ date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 }],
+      });
+      await expect(
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'new', accountId: 'not-a-uuid' }])
+      ).rejects.toThrow(ValidationError);
+      const { rowCount } = await pool.query('SELECT 1 FROM transaction_sources WHERE shared_item_id = $1', [id]);
+      expect(rowCount).toBe(0);
+    });
+
     test('an accountId belonging to a different user is rejected and rolls back', async () => {
       const otherUserId = await createTestUser(`confirm-other-${Date.now()}-${Math.random()}@findo.test`);
       const otherAccount = await accountsService.createAccount(otherUserId, { nickname: 'Other Checking', type: 'checking', institution_name: 'Chase' });
