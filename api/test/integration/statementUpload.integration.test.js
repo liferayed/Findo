@@ -110,4 +110,23 @@ describe('statement upload + status endpoints (against real Postgres/Redis)', ()
     const res = await request(app).get('/documents/00000000-0000-0000-0000-000000000000/status');
     expect(res.status).toBe(404);
   });
+
+  test('GET /documents/:id/status reports confirmed once the statement has been confirmed, not ready_for_review forever', async () => {
+    // Seed a shared_items/documents row directly (rather than via POST /documents/statements,
+    // which would enqueue a real extraction job that races with the docker findo-api worker
+    // consuming the same Redis/Postgres) with parse_status 'parsed' and extracted_data.confirmedAt
+    // set — mirroring what statementConfirmService.confirmReview writes on success — then assert
+    // the status endpoint reports 'confirmed', not 'ready_for_review'.
+    const { rows: [sharedItem] } = await pool.query(
+      `INSERT INTO shared_items (user_id, channel, content_type, file_ref, original_filename, parse_status)
+       VALUES ($1, 'web_upload', 'file', 'fake-ref', 'statement.png', 'parsed') RETURNING id`,
+      [userId]
+    );
+    await pool.query(
+      `INSERT INTO documents (shared_item_id, document_type, extracted_data) VALUES ($1, 'bank_statement', $2)`,
+      [sharedItem.id, JSON.stringify({ resolvedAccountId: '11111111-1111-1111-1111-111111111111', confirmedAt: new Date().toISOString() })]
+    );
+    const res = await request(app).get(`/documents/${sharedItem.id}/status`);
+    expect(res.body.status).toBe('confirmed');
+  });
 });

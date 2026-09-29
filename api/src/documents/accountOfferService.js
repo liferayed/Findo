@@ -28,15 +28,6 @@ function createAccountOfferService({ pool, accountsService, institutionsService 
   }
 
   async function resolveAccountOffer(userId, sharedItemId, { accept, type, nickname }) {
-    // F1.7 final review I3: declining used to write accountOfferDeclined:true and flip
-    // parse_status to 'parsed' — but getStatementStatus then reports ready_for_review, and both
-    // /review and /confirm-review correctly reject a statement with no resolvedAccountId,
-    // leaving no way forward. Until a per-row account picker exists (option b from the review,
-    // the simplest safe choice), decline is rejected outright rather than written as a dead end.
-    if (!accept) {
-      throw new ValidationError(['declining an account offer is not yet supported — please create the account']);
-    }
-
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -54,20 +45,29 @@ function createAccountOfferService({ pool, accountsService, institutionsService 
       }
       const data = rows[0].extracted_data;
 
-      const resolvedInstitutionName = (await institutionsService.resolveInstitutionAlias(data.institutionName)) || data.institutionName;
-      // F1.7 final review M1: createAccount used to always write via `pool`, its own connection —
-      // separate from this function's `client`/transaction — so the account was committed
-      // independently the instant this call returned, regardless of what happened afterwards in
-      // this function. Passing `client` here runs the INSERT on this same transaction, so if
-      // anything below fails and we ROLLBACK, the account creation rolls back with it instead of
-      // being left behind as an orphan.
-      const account = await accountsService.createAccount(userId, {
-        nickname: nickname || `${resolvedInstitutionName} ${data.accountTypeText || ''}`.trim(),
-        type,
-        institution_name: resolvedInstitutionName,
-        last_four: data.lastFour,
-      }, { client });
-      data.resolvedAccountId = account.id;
+      if (accept) {
+        const resolvedInstitutionName = (await institutionsService.resolveInstitutionAlias(data.institutionName)) || data.institutionName;
+        // F1.7 final review M1: createAccount used to always write via `pool`, its own connection —
+        // separate from this function's `client`/transaction — so the account was committed
+        // independently the instant this call returned, regardless of what happened afterwards in
+        // this function. Passing `client` here runs the INSERT on this same transaction, so if
+        // anything below fails and we ROLLBACK, the account creation rolls back with it instead of
+        // being left behind as an orphan.
+        const account = await accountsService.createAccount(userId, {
+          nickname: nickname || `${resolvedInstitutionName} ${data.accountTypeText || ''}`.trim(),
+          type,
+          institution_name: resolvedInstitutionName,
+          last_four: data.lastFour,
+        }, { client });
+        data.resolvedAccountId = account.id;
+      } else {
+        // F1.7 gap fix: decline no longer rejects outright. It means "skip matching entirely for
+        // this statement" — every row's account is picked individually in bulk-review, inserted
+        // as a plain new transaction with no findMatch call (statementConfirmService's declined
+        // branch). resolvedAccountId stays null; accountOfferDeclined is the signal both
+        // buildReview and confirmReview check for.
+        data.accountOfferDeclined = true;
+      }
 
       await client.query(
         `UPDATE documents SET extracted_data = $1 WHERE shared_item_id = $2`,
