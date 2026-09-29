@@ -3,6 +3,7 @@ import { AppShell } from './components/layout/AppShell';
 import { AccountsPage } from './pages/AccountsPage';
 import { TransactionsPage } from './pages/TransactionsPage';
 import { DocumentsPage } from './pages/DocumentsPage';
+import { StatementReviewPage } from './pages/StatementReviewPage';
 
 export function App() {
   return (
@@ -12,6 +13,7 @@ export function App() {
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/transactions" element={<TransactionsPage />} />
         <Route path="/documents" element={<DocumentsPage />} />
+        <Route path="/documents/:id/review" element={<StatementReviewPage />} />
       </Routes>
     </AppShell>
   );
