@@ -221,7 +221,7 @@ describe('StatementReviewPage', () => {
   });
 
   it('a tagged possible row is included with its reason and note', async () => {
-    const fetchMock = vi.fn((url: string, opts?: RequestInit) => {
+    const fetchMock = vi.fn((url: string) => {
       if (url === '/documents/stmt-2/review') {
         return Promise.resolve({
           ok: true,
@@ -314,7 +314,7 @@ describe('StatementReviewPage', () => {
   });
 
   it('confirm-review selections include accountId for unassigned rows', async () => {
-    const fetchMock = vi.fn((url: string, opts?: RequestInit) => {
+    const fetchMock = vi.fn((url: string) => {
       if (url === '/accounts') return Promise.resolve({ ok: true, json: async () => [{ id: 'a1', nickname: 'New Checking' }] });
       if (url === '/documents/stmt-9/review') {
         return Promise.resolve({

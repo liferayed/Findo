@@ -134,8 +134,9 @@ export function DocumentsPage() {
       setStage({ name: 'statement-processing', sharedItemId: statementId });
     }
     // navigate is stable from useNavigate(); statementId/showToast intentionally omitted from
-    // deps beyond what's read here to avoid re-triggering navigation on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // deps beyond what's read here to avoid re-triggering navigation on every render. (The
+    // react-hooks plugin isn't registered in this repo's eslint config, so there's no
+    // exhaustive-deps rule to suppress here — this comment records the reasoning instead.)
   }, [statementStatus.status, statementStatus.error]);
 
   async function loadAccountOffer(sharedItemId: string) {
