@@ -433,7 +433,8 @@ export function DocumentsPage() {
             setStage({ name: 'idle' });
           }}
           onCreated={() => {
-            setStage({ name: 'statement-processing', sharedItemId: stage.sharedItemId });
+            setStatementId(null);
+            navigate(`/documents/${stage.sharedItemId}/review`);
           }}
           onDeclined={() => {
             setStatementId(null);
