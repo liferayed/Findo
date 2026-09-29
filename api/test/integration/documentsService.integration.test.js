@@ -201,4 +201,80 @@ describe('documentsService.listDocuments', () => {
     expect(docs[0].account_nickname).toBe('Chase Checking');
     expect(docs[0].status).toBe('ready_for_review');
   });
+
+  it('an in-review statement resolved to a different account does not leak into an account-filtered list (F1.7 gap fix Task 6 review)', async () => {
+    const otherAccount = await accountsService.createAccount(userId, { type: 'savings', institution_name: 'Chase', nickname: 'Chase Savings', last_four: '9999' });
+    const { rows: [sharedItem] } = await pool.query(
+      `INSERT INTO shared_items (user_id, channel, content_type, file_ref, parse_status) VALUES ($1, 'web_upload', 'file', 'x.png', 'parsed') RETURNING id`,
+      [userId]
+    );
+    // Resolved to otherAccount, but has zero linked transactions yet (still in review).
+    await pool.query(
+      `INSERT INTO documents (shared_item_id, document_type, extracted_data) VALUES ($1, 'bank_statement', $2)`,
+      [sharedItem.id, JSON.stringify({ resolvedAccountId: otherAccount.id })]
+    );
+
+    // Filtered by the *original* account (not the one this statement resolved to) — must not appear.
+    const docs = await documentsService.listDocuments(userId, { accountId: account.id });
+
+    expect(docs).toHaveLength(0);
+  });
+
+  it('an in-review statement resolved to the filtered account still appears with 0 transaction_count', async () => {
+    const { rows: [sharedItem] } = await pool.query(
+      `INSERT INTO shared_items (user_id, channel, content_type, file_ref, parse_status) VALUES ($1, 'web_upload', 'file', 'x.png', 'parsed') RETURNING id`,
+      [userId]
+    );
+    await pool.query(
+      `INSERT INTO documents (shared_item_id, document_type, extracted_data) VALUES ($1, 'bank_statement', $2)`,
+      [sharedItem.id, JSON.stringify({ resolvedAccountId: account.id })]
+    );
+
+    const docs = await documentsService.listDocuments(userId, { accountId: account.id });
+
+    expect(docs).toHaveLength(1);
+    expect(docs[0].transaction_count).toBe(0);
+    expect(docs[0].account_nickname).toBe('Chase Checking');
+  });
+
+  it('a statement with transactions in two accounts, filtered by one, is shown with the count narrowed to just that account (partial match)', async () => {
+    const otherAccount = await accountsService.createAccount(userId, { type: 'savings', institution_name: 'Chase', nickname: 'Chase Savings', last_four: '9999' });
+    const { rows: [sharedItem] } = await pool.query(
+      `INSERT INTO shared_items (user_id, channel, content_type, file_ref, parse_status) VALUES ($1, 'web_upload', 'file', 'x.png', 'parsed') RETURNING id`,
+      [userId]
+    );
+    await pool.query(
+      `INSERT INTO documents (shared_item_id, document_type, extracted_data) VALUES ($1, 'bank_statement', $2)`,
+      [sharedItem.id, JSON.stringify({ resolvedAccountId: account.id, confirmedAt: new Date().toISOString() })]
+    );
+    const t1 = await transactionsService.createTransactionFromStatement(userId, { accountId: account.id, transactionDate: '2026-01-14', amount: -48.23, merchantRaw: 'Target' });
+    await pool.query(`INSERT INTO transaction_sources (transaction_id, shared_item_id, role) VALUES ($1, $2, 'origin')`, [t1.id, sharedItem.id]);
+    const t2 = await transactionsService.createTransactionFromStatement(userId, { accountId: otherAccount.id, transactionDate: '2026-01-15', amount: -30, merchantRaw: 'Shell' });
+    await pool.query(`INSERT INTO transaction_sources (transaction_id, shared_item_id, role) VALUES ($1, $2, 'origin')`, [t2.id, sharedItem.id]);
+
+    const docs = await documentsService.listDocuments(userId, { accountId: account.id });
+
+    expect(docs).toHaveLength(1);
+    expect(docs[0].transaction_count).toBe(1);
+    expect(Number(docs[0].transaction_amount)).toBeCloseTo(-48.23);
+    expect(docs[0].transaction_merchant_raw).toBe('Target');
+  });
+
+  it('a statement with transactions in only a different account is hidden entirely by the filter (full mismatch)', async () => {
+    const otherAccount = await accountsService.createAccount(userId, { type: 'savings', institution_name: 'Chase', nickname: 'Chase Savings', last_four: '9999' });
+    const { rows: [sharedItem] } = await pool.query(
+      `INSERT INTO shared_items (user_id, channel, content_type, file_ref, parse_status) VALUES ($1, 'web_upload', 'file', 'x.png', 'parsed') RETURNING id`,
+      [userId]
+    );
+    await pool.query(
+      `INSERT INTO documents (shared_item_id, document_type, extracted_data) VALUES ($1, 'bank_statement', $2)`,
+      [sharedItem.id, JSON.stringify({ resolvedAccountId: otherAccount.id, confirmedAt: new Date().toISOString() })]
+    );
+    const t1 = await transactionsService.createTransactionFromStatement(userId, { accountId: otherAccount.id, transactionDate: '2026-01-14', amount: -48.23, merchantRaw: 'Target' });
+    await pool.query(`INSERT INTO transaction_sources (transaction_id, shared_item_id, role) VALUES ($1, $2, 'origin')`, [t1.id, sharedItem.id]);
+
+    const docs = await documentsService.listDocuments(userId, { accountId: account.id });
+
+    expect(docs).toHaveLength(0);
+  });
 });
