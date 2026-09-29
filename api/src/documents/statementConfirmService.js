@@ -25,7 +25,11 @@ function createStatementConfirmService({ pool, transactionsService }) {
       throw new NotFoundError('statement not found');
     }
     const { parse_status: parseStatus, extracted_data: data } = rows[0];
-    if (parseStatus !== 'parsed' || !data.resolvedAccountId) {
+    // F1.7 gap fix: a declined account offer never gets a resolvedAccountId (by design — see
+    // accountOfferService), so "not ready" can no longer key on resolvedAccountId alone. A
+    // declined statement IS ready to confirm; it just has no single account, so accountType
+    // below is resolved later, per selection (see confirmReview's declined branch).
+    if (parseStatus !== 'parsed' || (!data.resolvedAccountId && !data.accountOfferDeclined)) {
       throw new ValidationError(['this statement is not ready to confirm']);
     }
     // parse_status stays 'parsed' after a successful confirm by design (F1.7 §2.4), so a
@@ -33,6 +37,11 @@ function createStatementConfirmService({ pool, transactionsService }) {
     // otherwise it would double-insert transactions and double-move the balance.
     if (data.confirmedAt) {
       throw new ValidationError(['this statement has already been confirmed']);
+    }
+    if (!data.resolvedAccountId) {
+      // Declined statement — no single account to look up a type for; the per-row accountType
+      // is resolved later, per selection, only if every checked row agrees (see confirmReview).
+      return { data, accountType: null };
     }
     // F1.7 final review I1: "is this a card statement" must be keyed on the RESOLVED
     // ACCOUNT's actual type, not on upload-time document_type (always 'bank_statement' in
@@ -51,6 +60,52 @@ function createStatementConfirmService({ pool, transactionsService }) {
     try {
       await client.query('BEGIN');
       const { data, accountType } = await loadReadyRow(client, userId, sharedItemId);
+
+      if (!data.resolvedAccountId) {
+        // F1.7 gap fix: a declined statement has no single account, so no findMatch/excludeIds
+        // logic applies at all — every checked row inserts as a new transaction on whichever
+        // account the user picked for it in bulk-review.
+        const selectionByIndex = new Map(selections.map((s) => [s.index, s]));
+        const insertedAccountIds = new Set();
+        for (let index = 0; index < data.transactions.length; index += 1) {
+          const selection = selectionByIndex.get(index);
+          if (!selection) {
+            continue;
+          }
+          if (!selection.accountId) {
+            throw new ValidationError(['each checked row on a declined statement needs an account']);
+          }
+          const row = data.transactions[index];
+          const transaction = await transactionsService.createTransactionFromStatement(
+            userId, { accountId: selection.accountId, transactionDate: row.date, amount: row.amount, merchantRaw: row.description }, { client }
+          );
+          await client.query(
+            `INSERT INTO transaction_sources (transaction_id, shared_item_id, role) VALUES ($1, $2, 'origin')`,
+            [transaction.id, sharedItemId]
+          );
+          insertedAccountIds.add(selection.accountId);
+        }
+
+        // 2026-09-27 decision: only upsert credit-card details when every checked row agreed on
+        // one account — a split across accounts means we can't attribute due_date/minimum_payment
+        // to a single one, so it's skipped rather than guessed. Documented limitation, not a bug.
+        if (insertedAccountIds.size === 1 && data.creditCard) {
+          const [onlyAccountId] = insertedAccountIds;
+          const { rows: [{ type: onlyAccountType }] } = await client.query('SELECT type FROM accounts WHERE id = $1', [onlyAccountId]);
+          if (onlyAccountType === 'credit_card') {
+            await upsertCreditCardDetails(client, onlyAccountId, data.creditCard);
+          }
+        }
+
+        await client.query(
+          `UPDATE documents SET extracted_data = jsonb_set(extracted_data, '{confirmedAt}', to_jsonb(now()::text))
+           WHERE shared_item_id = $1`,
+          [sharedItemId]
+        );
+        await client.query('COMMIT');
+        return;
+      }
+
       const accountId = data.resolvedAccountId;
       const selectionByIndex = new Map(selections.map((s) => [s.index, s]));
       const excludeIds = [];
