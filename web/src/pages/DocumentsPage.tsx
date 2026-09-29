@@ -681,6 +681,29 @@ function AccountOfferForm({
     onCreated();
   }
 
+  async function handleDecline() {
+    setSaving(true);
+    setError(null);
+    let res: Response;
+    try {
+      res = await fetch(`/documents/${sharedItemId}/account-offer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accept: false }),
+      });
+    } catch {
+      setError("Couldn't reach the server. Try again.");
+      setSaving(false);
+      return;
+    }
+    if (!res.ok) {
+      setError(await parseErrorMessage(res));
+      setSaving(false);
+      return;
+    }
+    onDeclined();
+  }
+
   return (
     <Modal
       title="No matching account"
@@ -722,14 +745,8 @@ function AccountOfferForm({
         <button
           type="button"
           className="text-xs font-semibold text-stone-500 hover:text-stone-700"
-          onClick={async () => {
-            await fetch(`/documents/${sharedItemId}/account-offer`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ accept: false }),
-            });
-            onDeclined();
-          }}
+          onClick={handleDecline}
+          disabled={saving}
         >
           I'll assign accounts myself
         </button>

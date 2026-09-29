@@ -339,6 +339,43 @@ describe('DocumentsPage', () => {
     await waitFor(() => expect(screen.getByText('Review Page Stub')).toBeInTheDocument());
   });
 
+  it('shows an error and stays put when declining the account offer fails', async () => {
+    const fetchMock = vi.fn((url: string, opts?: RequestInit) => {
+      if (url.startsWith('/accounts')) return Promise.resolve({ ok: true, json: async () => [] });
+      if (url.startsWith('/documents/statements')) return Promise.resolve({ ok: true, status: 202, json: async () => ({ shared_item_id: 'stmt-7' }) });
+      if (url.startsWith('/documents/stmt-7/status')) return Promise.resolve({ ok: true, json: async () => ({ status: 'needs_account', page: null, totalPages: null }) });
+      if (url === '/documents/stmt-7/account-offer' && (!opts || opts.method === undefined)) {
+        return Promise.resolve({ ok: true, json: async () => ({ institutionName: 'Chase', accountTypeText: null, lastFour: '4432', suggestedType: null }) });
+      }
+      if (url === '/documents/stmt-7/account-offer' && opts?.method === 'POST') {
+        return Promise.resolve({ ok: false, status: 400, json: async () => ({ error: 'already resolved' }) });
+      }
+      if (url.startsWith('/documents')) return Promise.resolve({ ok: true, json: async () => [] });
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/documents']}>
+        <ToastProvider>
+          <Routes>
+            <Route path="/documents" element={<DocumentsPage />} />
+            <Route path="/documents/:id/review" element={<div>Review Page Stub</div>} />
+          </Routes>
+        </ToastProvider>
+      </MemoryRouter>,
+    );
+    const file = new File(['%PDF-1.4'], 'statement.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByLabelText('Choose File') as HTMLInputElement, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: /upload/i }));
+    await waitFor(() => expect(screen.getByText(/no matching account/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /assign accounts myself/i }));
+
+    await waitFor(() => expect(screen.getByText('already resolved')).toBeInTheDocument());
+    expect(screen.queryByText('Review Page Stub')).not.toBeInTheDocument();
+  });
+
   it('the history table shows a statement as one row with a transaction count and a Review action', async () => {
     vi.stubGlobal(
       'fetch',
