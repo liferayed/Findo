@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '../components/ui/ToastProvider';
@@ -50,6 +50,7 @@ describe('DocumentsPage', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   function selectAFile() {
@@ -418,6 +419,41 @@ describe('DocumentsPage', () => {
     );
     await waitFor(() => expect(screen.getByText('Review Page Stub')).toBeInTheDocument());
     expect(screen.queryByText('Reading your statement')).not.toBeInTheDocument();
+  });
+
+  it('dismissing the processing modal stops polling for that statement', async () => {
+    vi.useFakeTimers();
+    let statusCalls = 0;
+    const fetchMock = vi.fn((url: string) => {
+      if (url.startsWith('/accounts')) return Promise.resolve({ ok: true, json: async () => [] });
+      if (url.startsWith('/documents/statements')) return Promise.resolve({ ok: true, status: 202, json: async () => ({ shared_item_id: 'stmt-9' }) });
+      if (url.startsWith('/documents/stmt-9/status')) {
+        statusCalls += 1;
+        return Promise.resolve({ ok: true, json: async () => ({ status: 'processing', page: statusCalls, totalPages: 3 }) });
+      }
+      if (url.startsWith('/documents')) return Promise.resolve({ ok: true, json: async () => [] });
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    const file = new File(['%PDF-1.4'], 'statement.pdf', { type: 'application/pdf' });
+    const input = screen.getByLabelText('Choose File') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: /upload/i }));
+
+    await vi.waitFor(() => expect(screen.getByText('Reading your statement')).toBeInTheDocument());
+
+    const callsBeforeDismiss = statusCalls;
+    fireEvent.click(screen.getByTestId('modal-backdrop'));
+    expect(screen.queryByText('Reading your statement')).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9000);
+    });
+
+    expect(statusCalls).toBe(callsBeforeDismiss);
+    vi.useRealTimers();
   });
 
   it('the history table shows a statement as one row with a transaction count and a Review action', async () => {

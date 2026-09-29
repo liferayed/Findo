@@ -414,7 +414,13 @@ export function DocumentsPage() {
       )}
 
       {stage.name === 'statement-processing' && (
-        <Modal title="Reading your statement" onClose={() => setStage({ name: 'idle' })}>
+        <Modal
+          title="Reading your statement"
+          onClose={() => {
+            setStatementId(null);
+            setStage({ name: 'idle' });
+          }}
+        >
           <p className="text-sm text-stone-600">
             {statementStatus.page && statementStatus.totalPages
               ? `Page ${statementStatus.page} of ${statementStatus.totalPages}…`
