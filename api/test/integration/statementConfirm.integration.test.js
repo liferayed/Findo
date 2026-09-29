@@ -3,7 +3,7 @@ const { createAccountsService } = require('../../src/accounts/accountsService');
 const { createTransactionsService } = require('../../src/transactions/transactionsService');
 const { createStatementConfirmService } = require('../../src/documents/statementConfirmService');
 const { createStatementReviewService } = require('../../src/documents/statementReviewService');
-const { ValidationError } = require('../../src/errors');
+const { ValidationError, NotFoundError } = require('../../src/errors');
 
 const accountsService = createAccountsService({ pool });
 const transactionsService = createTransactionsService({ pool });
@@ -15,12 +15,23 @@ async function createTestUser(email) {
   return rows[0].id;
 }
 
-async function seedReadyForReview(userId, accountId, transactions) {
+// F1.7 gap-fix Task 5: a declined statement needs resolvedAccountId: null and
+// accountOfferDeclined: true, plus optionally a creditCard block — none of which the plain
+// array form below can express. transactionsOrOptions stays an array for every pre-existing
+// call (identical extractedData shape as before) or an options object for the new tests.
+async function seedReadyForReview(userId, accountId, transactionsOrOptions) {
+  const options = Array.isArray(transactionsOrOptions) ? { transactions: transactionsOrOptions } : transactionsOrOptions;
+  const {
+    transactions,
+    resolvedAccountId = accountId,
+    accountOfferDeclined = false,
+    creditCard = null,
+  } = options;
   const { rows: [sharedItem] } = await pool.query(
     `INSERT INTO shared_items (user_id, channel, content_type, file_ref, parse_status) VALUES ($1, 'web_upload', 'file', 'api/uploads/statements/x.png', 'parsed') RETURNING id`,
     [userId]
   );
-  const extractedData = { transactions, beginningBalance: null, endingBalance: null, institutionName: null, accountTypeText: null, lastFour: null, creditCard: null, resolvedAccountId: accountId, accountOfferDeclined: false };
+  const extractedData = { transactions, beginningBalance: null, endingBalance: null, institutionName: null, accountTypeText: null, lastFour: null, creditCard, resolvedAccountId, accountOfferDeclined };
   await pool.query(`INSERT INTO documents (shared_item_id, document_type, extracted_data) VALUES ($1, 'bank_statement', $2)`, [sharedItem.id, JSON.stringify(extractedData)]);
   return sharedItem.id;
 }
@@ -423,6 +434,148 @@ describe('statement confirm service (against real Postgres)', () => {
       // was silently dropped by a mid-batch rejection or a mis-classification.
       expect(all).toHaveLength(5);
       expect(await balanceOf(account.id)).toBeCloseTo(balanceBefore - 96.46, 5);
+    });
+  });
+
+  // F1.7 gap fix Task 5: a declined offer has no single resolved account, so confirm has to
+  // skip findMatch/excludeIds entirely and insert each checked row on whichever account the
+  // user picked for it in bulk-review, with the credit-card upsert only when every row agreed.
+  describe('a declined account offer: per-row accounts, no matching', () => {
+    test('a declined statement inserts each checked row on its own selected account, with no matching', async () => {
+      const accountA = await accountsService.createAccount(userId, { nickname: 'New Checking', type: 'checking', institution_name: 'Chase' });
+      const id = await seedReadyForReview(userId, null, {
+        resolvedAccountId: null, accountOfferDeclined: true,
+        transactions: [
+          { date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 },
+          { date: '2026-01-15', description: 'SHELL OIL', amount: -30 },
+        ],
+      });
+      await confirmService.confirmReview(userId, id, [
+        { index: 0, action: 'new', accountId: accountA.id },
+        { index: 1, action: 'new', accountId: accountA.id },
+      ]);
+      const { rows } = await pool.query('SELECT * FROM transactions WHERE account_id = $1 ORDER BY transaction_date', [accountA.id]);
+      expect(rows).toHaveLength(2);
+      expect(rows.every((t) => t.reconciliation_status === 'confirmed' && t.is_manual === false)).toBe(true);
+    });
+
+    test('a checked row on a declined statement with no accountId is rejected, rolling back the whole batch', async () => {
+      const id = await seedReadyForReview(userId, null, {
+        resolvedAccountId: null, accountOfferDeclined: true,
+        transactions: [{ date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 }],
+      });
+      await expect(confirmService.confirmReview(userId, id, [{ index: 0, action: 'new' }])).rejects.toThrow(ValidationError);
+      // Scoped to this batch's own shared_item_id rather than the whole transactions table —
+      // this environment's shared Postgres carries unrelated pre-existing seed rows, so an
+      // unfiltered count would false-fail on rows this test never touched.
+      const { rowCount } = await pool.query('SELECT 1 FROM transaction_sources WHERE shared_item_id = $1', [id]);
+      expect(rowCount).toBe(0);
+    });
+
+    test('credit-card details upsert when every checked row on a declined statement used the same credit_card account', async () => {
+      const card = await accountsService.createAccount(userId, { nickname: 'New Card', type: 'credit_card', institution_name: 'Chase' });
+      const id = await seedReadyForReview(userId, null, {
+        resolvedAccountId: null, accountOfferDeclined: true,
+        transactions: [{ date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 }],
+        creditCard: { due_date: '2026-02-10', minimum_payment: 35, issuer: null, credit_limit: null, apr: null },
+      });
+      await confirmService.confirmReview(userId, id, [{ index: 0, action: 'new', accountId: card.id }]);
+      const { rows: [details] } = await pool.query('SELECT minimum_payment FROM credit_card_details WHERE account_id = $1', [card.id]);
+      expect(Number(details.minimum_payment)).toBe(35);
+    });
+
+    test('credit-card details upsert is skipped when checked rows on a declined statement use different accounts', async () => {
+      const cardA = await accountsService.createAccount(userId, { nickname: 'Card A', type: 'credit_card', institution_name: 'Chase' });
+      const cardB = await accountsService.createAccount(userId, { nickname: 'Card B', type: 'credit_card', institution_name: 'Amex' });
+      const id = await seedReadyForReview(userId, null, {
+        resolvedAccountId: null, accountOfferDeclined: true,
+        transactions: [
+          { date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 },
+          { date: '2026-01-15', description: 'SHELL OIL', amount: -30 },
+        ],
+        creditCard: { due_date: '2026-02-10', minimum_payment: 35, issuer: null, credit_limit: null, apr: null },
+      });
+      await confirmService.confirmReview(userId, id, [
+        { index: 0, action: 'new', accountId: cardA.id },
+        { index: 1, action: 'new', accountId: cardB.id },
+      ]);
+      const { rowCount } = await pool.query('SELECT 1 FROM credit_card_details WHERE account_id IN ($1, $2)', [cardA.id, cardB.id]);
+      expect(rowCount).toBe(0);
+    });
+
+    test('a non-new action on a declined statement is rejected, rolling back the whole batch', async () => {
+      const accountA = await accountsService.createAccount(userId, { nickname: 'New Checking', type: 'checking', institution_name: 'Chase' });
+      const id = await seedReadyForReview(userId, null, {
+        resolvedAccountId: null, accountOfferDeclined: true,
+        transactions: [{ date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 }],
+      });
+      await expect(
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'force', accountId: accountA.id }])
+      ).rejects.toThrow(ValidationError);
+      const { rowCount } = await pool.query('SELECT 1 FROM transaction_sources WHERE shared_item_id = $1', [id]);
+      expect(rowCount).toBe(0);
+    });
+
+    test('a later invalid row rolls back an earlier valid row on the same declined statement, including its balance change', async () => {
+      const accountA = await accountsService.createAccount(userId, { nickname: 'New Checking', type: 'checking', institution_name: 'Chase' });
+      const id = await seedReadyForReview(userId, null, {
+        resolvedAccountId: null, accountOfferDeclined: true,
+        transactions: [
+          { date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 },
+          { date: '2026-01-15', description: 'SHELL OIL', amount: -30 },
+        ],
+      });
+      const balanceBefore = await balanceOf(accountA.id);
+      await expect(
+        confirmService.confirmReview(userId, id, [
+          { index: 0, action: 'new', accountId: accountA.id },
+          { index: 1, action: 'new' }, // no accountId — invalid, should roll back row 0 too
+        ])
+      ).rejects.toThrow(ValidationError);
+      const { rowCount } = await pool.query('SELECT 1 FROM transaction_sources WHERE shared_item_id = $1', [id]);
+      expect(rowCount).toBe(0);
+      expect(await balanceOf(accountA.id)).toBe(balanceBefore);
+    });
+
+    test('a malformed accountId on a declined statement is rejected with a clean ValidationError, not a 500', async () => {
+      const id = await seedReadyForReview(userId, null, {
+        resolvedAccountId: null, accountOfferDeclined: true,
+        transactions: [{ date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 }],
+      });
+      await expect(
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'new', accountId: 'not-a-uuid' }])
+      ).rejects.toThrow(ValidationError);
+      const { rowCount } = await pool.query('SELECT 1 FROM transaction_sources WHERE shared_item_id = $1', [id]);
+      expect(rowCount).toBe(0);
+    });
+
+    test('an accountId belonging to a different user is rejected and rolls back', async () => {
+      const otherUserId = await createTestUser(`confirm-other-${Date.now()}-${Math.random()}@findo.test`);
+      const otherAccount = await accountsService.createAccount(otherUserId, { nickname: 'Other Checking', type: 'checking', institution_name: 'Chase' });
+      const id = await seedReadyForReview(userId, null, {
+        resolvedAccountId: null, accountOfferDeclined: true,
+        transactions: [{ date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 }],
+      });
+      await expect(
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'new', accountId: otherAccount.id }])
+      ).rejects.toThrow(NotFoundError);
+      const { rowCount } = await pool.query('SELECT 1 FROM transaction_sources WHERE shared_item_id = $1', [id]);
+      expect(rowCount).toBe(0);
+      await pool.query('DELETE FROM users WHERE id = $1', [otherUserId]);
+    });
+
+    test('an accountId belonging to this user but inactive is rejected and rolls back', async () => {
+      const inactiveAccount = await accountsService.createAccount(userId, { nickname: 'Old Checking', type: 'checking', institution_name: 'Chase' });
+      await accountsService.updateAccount(userId, inactiveAccount.id, { is_active: false });
+      const id = await seedReadyForReview(userId, null, {
+        resolvedAccountId: null, accountOfferDeclined: true,
+        transactions: [{ date: '2026-01-14', description: 'TARGET 1234', amount: -48.23 }],
+      });
+      await expect(
+        confirmService.confirmReview(userId, id, [{ index: 0, action: 'new', accountId: inactiveAccount.id }])
+      ).rejects.toThrow(NotFoundError);
+      const { rowCount } = await pool.query('SELECT 1 FROM transaction_sources WHERE shared_item_id = $1', [id]);
+      expect(rowCount).toBe(0);
     });
   });
 });

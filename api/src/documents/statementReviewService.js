@@ -21,7 +21,7 @@ function createStatementReviewService({ pool }) {
     if (parseStatus !== 'parsed') {
       throw new ValidationError(['this statement is not parsed yet — it is not ready for review']);
     }
-    if (!data.resolvedAccountId) {
+    if (!data.resolvedAccountId && !data.accountOfferDeclined) {
       throw new ValidationError(['this statement has no resolved account — it is not ready for review']);
     }
     return data;
@@ -29,6 +29,18 @@ function createStatementReviewService({ pool }) {
 
   async function buildReview(userId, sharedItemId) {
     const data = await loadReadyRow(userId, sharedItemId);
+
+    // F1.7 gap fix: a declined offer has no account to scope findMatch against — matching is
+    // skipped entirely for these rows (the user's decision to decline means picking accounts
+    // per row themselves in bulk-review, not auto-matching). No balance-mismatch check either,
+    // for the same reason (getBalanceAsOf needs an account).
+    if (!data.resolvedAccountId) {
+      const rows = data.transactions.map((row, index) => ({
+        index, date: row.date, merchant: row.description, amount: row.amount, kind: 'unassigned',
+      }));
+      return { accountId: null, rows, balanceMismatch: null };
+    }
+
     const accountId = data.resolvedAccountId;
 
     const excludeIds = [];

@@ -65,19 +65,24 @@ describe('account offer service (against real Postgres)', () => {
     expect(account.last_four).toBe('9911');
   });
 
-  // F1.7 final review I3: declining used to write accountOfferDeclined:true and flip
-  // parse_status to 'parsed', which getStatementStatus then reported as ready_for_review — but
-  // /review and /confirm-review both correctly reject a statement with no resolvedAccountId,
-  // leaving no way forward. Until a per-row account picker exists, decline is rejected outright
-  // instead of being written as a dead end.
-  test('decline is rejected — not yet supported — and leaves the statement untouched', async () => {
+  test('decline marks accountOfferDeclined without creating an account, and parse_status becomes parsed', async () => {
     const id = await seedNeedsClarification(userId, { institutionName: 'Chase', accountTypeText: null, lastFour: '9911', creditCard: null, transactions: [], resolvedAccountId: null, accountOfferDeclined: false });
-    await expect(service.resolveAccountOffer(userId, id, { accept: false })).rejects.toThrow(ValidationError);
-
-    const { rows: [row] } = await pool.query(`SELECT si.parse_status, d.extracted_data FROM documents d JOIN shared_items si ON si.id = d.shared_item_id WHERE si.id = $1`, [id]);
-    expect(row.parse_status).toBe('needs_clarification'); // still pending, not stuck in a dead end
-    expect(row.extracted_data.accountOfferDeclined).toBe(false);
+    await service.resolveAccountOffer(userId, id, { accept: false });
+    const { rows: [row] } = await pool.query(
+      `SELECT si.parse_status, d.extracted_data FROM shared_items si JOIN documents d ON d.shared_item_id = si.id WHERE si.id = $1`,
+      [id]
+    );
+    expect(row.parse_status).toBe('parsed');
+    expect(row.extracted_data.accountOfferDeclined).toBe(true);
     expect(row.extracted_data.resolvedAccountId).toBeNull();
+    const { rowCount } = await pool.query('SELECT 1 FROM accounts WHERE user_id = $1', [userId]);
+    expect(rowCount).toBe(0);
+  });
+
+  test('a second concurrent decline on an already-resolved statement is rejected, matching the accept path\'s lock', async () => {
+    const id = await seedNeedsClarification(userId, { institutionName: 'Chase', accountTypeText: null, lastFour: '9911', creditCard: null, transactions: [], resolvedAccountId: null, accountOfferDeclined: false });
+    await service.resolveAccountOffer(userId, id, { accept: false });
+    await expect(service.resolveAccountOffer(userId, id, { accept: false })).rejects.toThrow(ValidationError);
   });
 
   // F1.7 final review M1: createAccount used to write via `pool`, its own connection — separate
