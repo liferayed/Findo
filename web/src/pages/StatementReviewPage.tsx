@@ -13,19 +13,22 @@ type ReviewRow = {
   date: string;
   merchant: string;
   amount: number;
-  kind: 'new' | 'corroborate' | 'duplicate' | 'possible' | 'ambiguous';
+  kind: 'new' | 'corroborate' | 'duplicate' | 'possible' | 'ambiguous' | 'unassigned';
   candidate?: { id: string };
   confidence?: number;
   difference?: number;
 };
 
 type ReviewResponse = {
-  accountId: string;
+  accountId: string | null;
   rows: ReviewRow[];
   balanceMismatch: { statementEndingBalance: number; reconstructedBalance: number; gap: number } | null;
 };
 
-const KIND_BADGE: Record<ReviewRow['kind'], { label: string; tone: 'success' | 'warning' | 'muted' | 'danger' }> = {
+// 'unassigned' is deliberately excluded from this map's keys — it never renders as a Badge
+// (it gets an account <select> instead), so callers must check `row.kind !== 'unassigned'`
+// before indexing rather than widening the type with a cast.
+const KIND_BADGE: Record<Exclude<ReviewRow['kind'], 'unassigned'>, { label: string; tone: 'success' | 'warning' | 'muted' | 'danger' }> = {
   new: { label: 'New', tone: 'success' },
   corroborate: { label: 'Merged', tone: 'muted' },
   duplicate: { label: 'Possible Duplicate', tone: 'warning' },
@@ -46,6 +49,15 @@ export function StatementReviewPage() {
   const [openPopoverIndex, setOpenPopoverIndex] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<Array<{ id: string; nickname: string }>>([]);
+  const [rowAccountId, setRowAccountId] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    fetch('/accounts')
+      .then((res) => (res.ok ? res.json() : []))
+      .then(setAccounts)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -69,6 +81,9 @@ export function StatementReviewPage() {
   }, [data]);
 
   function toggleRow(row: ReviewRow) {
+    if (row.kind === 'unassigned' && !rowAccountId[row.index]) {
+      return; // can't check until an account is picked — the checkbox is also disabled below
+    }
     if (row.kind === 'possible') {
       if (checked[row.index]) {
         setChecked((c) => ({ ...c, [row.index]: false }));
@@ -93,6 +108,7 @@ export function StatementReviewPage() {
     return data.rows
       .filter((r) => r.kind !== 'corroborate' && checked[r.index])
       .map((r) => {
+        if (r.kind === 'unassigned') return { index: r.index, action: 'new' as const, accountId: rowAccountId[r.index] };
         if (r.kind === 'new') return { index: r.index, action: 'new' as const };
         if (r.kind === 'possible') {
           const tag = tags[r.index];
@@ -172,6 +188,7 @@ export function StatementReviewPage() {
                     <input
                       type="checkbox"
                       checked={Boolean(checked[row.index])}
+                      disabled={row.kind === 'unassigned' && !rowAccountId[row.index]}
                       onChange={() => toggleRow(row)}
                       aria-label={`Save row ${row.index}`}
                     />
@@ -180,7 +197,25 @@ export function StatementReviewPage() {
                   <td className="px-4 py-3">{row.merchant}</td>
                   <td className="px-4 py-3 text-right">${Math.abs(row.amount).toFixed(2)}</td>
                   <td className="px-4 py-3">
-                    <Badge tone={KIND_BADGE[row.kind].tone}>{KIND_BADGE[row.kind].label}</Badge>
+                    {row.kind === 'unassigned' ? (
+                      <select
+                        aria-label={`Account for row ${row.index}`}
+                        className="rounded-md border border-stone-200 bg-white px-2 py-1 text-xs"
+                        value={rowAccountId[row.index] ?? ''}
+                        onChange={(e) => setRowAccountId((r) => ({ ...r, [row.index]: e.target.value }))}
+                      >
+                        <option value="" disabled>
+                          Select an account…
+                        </option>
+                        {accounts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.nickname}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <Badge tone={KIND_BADGE[row.kind].tone}>{KIND_BADGE[row.kind].label}</Badge>
+                    )}
                   </td>
                 </tr>
               ))}

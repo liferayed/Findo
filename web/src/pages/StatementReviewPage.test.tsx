@@ -290,4 +290,61 @@ describe('StatementReviewPage', () => {
     await waitFor(() => expect(screen.getByText('this statement has already been confirmed')).toBeInTheDocument());
     expect(screen.getByText('Target')).toBeInTheDocument(); // still on the page
   });
+
+  it('an unassigned row (declined statement) shows an account picker instead of a status badge, and requires an account before it can be checked', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url === '/accounts') return Promise.resolve({ ok: true, json: async () => [{ id: 'a1', nickname: 'New Checking' }] });
+        if (url === '/documents/stmt-8/review') {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ accountId: null, rows: [{ index: 0, date: '2026-01-14', merchant: 'Target', amount: -48.23, kind: 'unassigned' }], balanceMismatch: null }),
+          });
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      }),
+    );
+    renderPage('stmt-8');
+    await waitFor(() => expect(screen.getByText('Target')).toBeInTheDocument());
+    const checkbox = screen.getByLabelText('Save row 0') as HTMLInputElement;
+    expect(checkbox).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/account for row 0/i), { target: { value: 'a1' } });
+    expect(checkbox).not.toBeDisabled();
+  });
+
+  it('confirm-review selections include accountId for unassigned rows', async () => {
+    const fetchMock = vi.fn((url: string, opts?: RequestInit) => {
+      if (url === '/accounts') return Promise.resolve({ ok: true, json: async () => [{ id: 'a1', nickname: 'New Checking' }] });
+      if (url === '/documents/stmt-9/review') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ accountId: null, rows: [{ index: 0, date: '2026-01-14', merchant: 'Target', amount: -48.23, kind: 'unassigned' }], balanceMismatch: null }),
+        });
+      }
+      if (url === '/documents/stmt-9/confirm-review') return Promise.resolve({ ok: true, json: async () => ({ ok: true }) });
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <MemoryRouter initialEntries={['/documents/stmt-9/review']}>
+        <ToastProvider>
+          <Routes>
+            <Route path="/documents/:id/review" element={<StatementReviewPage />} />
+            <Route path="/documents" element={<div>Documents Page Stub</div>} />
+          </Routes>
+        </ToastProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText('Target')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/account for row 0/i), { target: { value: 'a1' } });
+    fireEvent.click(screen.getByLabelText('Save row 0'));
+    fireEvent.click(screen.getByRole('button', { name: /confirm & save 1/i }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/documents/stmt-9/confirm-review',
+        expect.objectContaining({ body: JSON.stringify({ selections: [{ index: 0, action: 'new', accountId: 'a1' }] }) }),
+      ),
+    );
+  });
 });

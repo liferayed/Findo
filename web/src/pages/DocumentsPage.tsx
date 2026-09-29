@@ -26,9 +26,12 @@ type HistoryRow = {
   received_at: string;
   channel: string;
   parse_status: string;
+  document_type: string;
+  status: string;
+  transaction_count: number;
   account_nickname: string | null;
-  transaction_merchant_raw: string | null;
-  transaction_amount: string | null;
+  transaction_merchant_raw?: string | null;
+  transaction_amount?: string | null;
 };
 
 type AccountOffer = { institutionName: string | null; accountTypeText: string | null; lastFour: string | null; suggestedType: 'credit_card' | null };
@@ -51,6 +54,22 @@ function isoDateDaysAgo(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() - days);
   return d.toISOString().slice(0, 10);
+}
+
+function statusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    pending: 'Processing', processing: 'Processing', needs_account: 'Needs Account',
+    ready_for_review: 'Ready for Review', confirmed: 'Confirmed', failed: 'Unreadable',
+    parsed: 'Parsed', needs_clarification: 'Needs Info',
+  };
+  return labels[status] ?? status;
+}
+
+function statusTone(status: string): 'success' | 'warning' | 'muted' | 'danger' {
+  if (status === 'confirmed' || status === 'parsed') return 'success';
+  if (status === 'failed') return 'danger';
+  if (status === 'needs_account' || status === 'ready_for_review' || status === 'needs_clarification') return 'warning';
+  return 'muted';
 }
 
 export async function parseErrorMessage(res: Response): Promise<string> {
@@ -287,12 +306,32 @@ export function DocumentsPage() {
                       <td className="px-4 py-3 text-stone-600">{row.channel === 'chat' ? 'Chat' : 'Web'}</td>
                       <td className="px-4 py-3 text-stone-600">{row.account_nickname ?? '—'}</td>
                       <td className="px-4 py-3">
-                        <Badge tone={row.parse_status === 'parsed' ? 'success' : row.parse_status === 'failed' ? 'danger' : 'muted'}>
-                          {row.parse_status === 'parsed' ? 'Parsed' : row.parse_status === 'failed' ? 'Unreadable' : 'Processing'}
-                        </Badge>
+                        <Badge tone={statusTone(row.status)}>{statusLabel(row.status)}</Badge>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {row.transaction_merchant_raw ? `$${Math.abs(Number(row.transaction_amount)).toFixed(2)} · ${row.transaction_merchant_raw}` : '—'}
+                        {row.document_type === 'receipt'
+                          ? row.transaction_merchant_raw
+                            ? `$${Math.abs(Number(row.transaction_amount)).toFixed(2)} · ${row.transaction_merchant_raw}`
+                            : '—'
+                          : row.transaction_count > 0
+                            ? `${row.transaction_count} transaction${row.transaction_count > 1 ? 's' : ''}`
+                            : '—'}
+                        {row.document_type !== 'receipt' && row.status === 'ready_for_review' && (
+                          <a href={`/documents/${row.id}/review`} className="ml-2 font-semibold text-emerald-800 hover:underline">
+                            Review
+                          </a>
+                        )}
+                        {row.document_type !== 'receipt' && row.status === 'needs_account' && (
+                          <button
+                            className="ml-2 font-semibold text-emerald-800 hover:underline"
+                            onClick={() => {
+                              setStatementId(row.id);
+                              loadAccountOffer(row.id);
+                            }}
+                          >
+                            Resolve Account
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -394,6 +433,10 @@ export function DocumentsPage() {
           }}
           onCreated={() => {
             setStage({ name: 'statement-processing', sharedItemId: stage.sharedItemId });
+          }}
+          onDeclined={() => {
+            setStatementId(null);
+            navigate(`/documents/${stage.sharedItemId}/review`);
           }}
         />
       )}
@@ -600,11 +643,13 @@ function AccountOfferForm({
   offer,
   onClose,
   onCreated,
+  onDeclined,
 }: {
   sharedItemId: string;
   offer: AccountOffer;
   onClose: () => void;
   onCreated: () => void;
+  onDeclined: () => void;
 }) {
   const [type, setType] = useState(offer.suggestedType ?? '');
   const [nickname, setNickname] = useState(
@@ -673,7 +718,21 @@ function AccountOfferForm({
       <p className="mb-3 text-[10px] text-stone-400">
         You'll need to create an account to continue reviewing this statement.
       </p>
-      <div className="mt-4 flex justify-end gap-2">
+      <div className="mt-4 flex justify-between gap-2">
+        <button
+          type="button"
+          className="text-xs font-semibold text-stone-500 hover:text-stone-700"
+          onClick={async () => {
+            await fetch(`/documents/${sharedItemId}/account-offer`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ accept: false }),
+            });
+            onDeclined();
+          }}
+        >
+          I'll assign accounts myself
+        </button>
         <Button onClick={handleCreate} disabled={saving || !nickname || !type}>
           {saving ? 'Creating…' : 'Create Account'}
         </Button>
