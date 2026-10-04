@@ -101,10 +101,12 @@ describe('F1.9 — no sensitive identifier reaches the database through any inge
   test('web account creation: a full card number in last_four, nickname and institution', async () => {
     const res = await request(buildApp(userId))
       .post('/accounts')
-      .send({ nickname: `Visa ${CARD}`, type: 'credit_card', institution_name: 'Chase', last_four: CARD });
+      .send({ nickname: `Visa ${CARD}`, type: 'credit_card', institution_name: `Chase ${CARD}`, last_four: CARD });
     expect(res.status).toBe(201);
     expect(res.body.last_four).toBe('1111');
-    expect(await expectNoSensitiveData(userId)).toContain('Visa ****1111');
+    const dump = await expectNoSensitiveData(userId);
+    expect(dump).toContain('Visa ****1111');
+    expect(dump).toContain('Chase ****1111');
   });
 
   test('chat account creation', async () => {
@@ -112,7 +114,12 @@ describe('F1.9 — no sensitive identifier reaches the database through any inge
       .post('/chat/messages')
       .send({ text: `Add my Chase checking account, ${PAYLOAD}` });
     expect(res.status).toBe(201);
+    expect(res.body.received).toContain('****1111');
     await expectNoSensitiveData(userId);
+    const { rows } = await pool.query('SELECT nickname, institution_name FROM accounts WHERE user_id = $1', [userId]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].institution_name).toBe('Chase');
+    expect(rows[0].nickname).toBe('Chase Checking');
   });
 
   test('manual web transaction (F1.3)', async () => {
