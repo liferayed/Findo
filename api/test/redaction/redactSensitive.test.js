@@ -35,6 +35,12 @@ describe('redactText', () => {
     ['zip 94105 4111-1111-1111-1111 exp 05 27', 'zip 94105 ****1111 exp 05 27'],
     ['three 4111 1111 1111 1111 378282246310005 4000000000000000006', 'three ****1111 ****0005 ****0006'],
     ['checking 000123456789', 'checking ****6789'],
+    ['stmt-4111111111111111.pdf', 'stmt-****1111.pdf'],
+    ['receipt-4111111111111111.png', 'receipt-****1111.png'],
+    ['VISA-4111111111111111', 'VISA-****1111'],
+    ['Card-4111-1111-1111-1111', 'Card-****1111'],
+    ['REF-4111 1111 1111 1111', 'REF-****1111'],
+    ['AMEX-378282246310005', 'AMEX-****0005'],
     ['savings acct 000123456789', 'savings acct ****6789'],
     ['acct ending in 000123456789', 'acct ending in ****6789'],
   ])('redacts %j', (input, expected) => {
@@ -134,9 +140,9 @@ describe('redactText — properties', () => {
       const body = String(3 + int(4)) + digitString(14);
       const card = body + luhnCheckDigit(body);
       const grouped = card.match(/.{1,4}/g).join(int(2) ? ' ' : '-');
-      const prefix = [digitString(5), digitString(4), digitString(3), ''][int(4)];
+      const prefix = [digitString(5), digitString(4), digitString(3), '', 'VISA-', 'stmt-', `${digitString(4)}-`][int(7)];
       const suffix = ['', ` ${digitString(2)} ${digitString(2)}`, ` ${digitString(3)}`][int(3)];
-      const text = `ref ${prefix} ${grouped}${suffix} end`;
+      const text = prefix.endsWith('-') && int(2) ? `ref ${prefix}${grouped}${suffix} end` : `ref ${prefix} ${grouped}${suffix} end`;
       const compact = redactText(text).replace(/[ -]/g, '');
       if ([card.slice(0, 8), card.slice(4, 12), card.slice(8)].some((part) => compact.includes(part))) {
         leaks.push(text);
@@ -152,6 +158,27 @@ describe('redactText — properties', () => {
     for (let i = 0; i < 5000; i += 1) {
       const groups = Array.from({ length: 2 + int(7) }, () => Array.from({ length: 1 + int(7) }, () => int(10)).join(''));
       const text = `x ${groups.map((g, j) => (j ? (int(2) ? ' ' : '-') : '') + g).join('')}`;
+      const once = redactText(text);
+      if (redactText(once) !== once) {
+        changed.push(text);
+      }
+    }
+    expect(changed).toEqual([]);
+  });
+
+  test('redacting twice equals redacting once across mixed rule types', () => {
+    const random = seededRandom(23);
+    const int = (n) => Math.floor(random() * n);
+    const digitString = (n) => Array.from({ length: n }, () => int(10)).join('');
+    const tokens = [
+      () => 'SSN', () => 'ss#', () => 'social security', () => 'routing', () => 'acct', () => 'checking', () => 'ending in',
+      () => 'VISA-', () => ':', () => '#', () => digitString(9), () => digitString(9),
+      () => `${digitString(3)}-${digitString(2)}-${digitString(4)}`,
+      () => digitString(4), () => digitString(4), () => digitString(12), () => digitString(16), () => 'TRANSFER',
+    ];
+    const changed = [];
+    for (let i = 0; i < 5000; i += 1) {
+      const text = Array.from({ length: 3 + int(8) }, () => tokens[int(tokens.length)]()).join([' ', ' ', '-'][int(3)]);
       const once = redactText(text);
       if (redactText(once) !== once) {
         changed.push(text);

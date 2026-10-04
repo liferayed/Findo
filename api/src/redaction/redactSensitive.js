@@ -103,8 +103,11 @@ function maskCardCandidate(match) {
 }
 
 const SSN_FORMATTED = /(?<!\d)(\d{3})([- ])(\d{2})\2(\d{4})(?!\d)/g;
-const SSN_LABELLED = /(\b(?:ssn\b|ss#|social\s+security\b)[^\d]{0,20})(\d{9})(?!\d)/gi;
-const CARD_CANDIDATE = /(?<![\d*-])\d(?:[ -]?\d){12,}(?!\d)/g;
+const SSN_LABELLED = /(\b(?:ssn\b|ss#|social\s+security\b)[^\d\]]{0,20})(\d{9})(?!\d)/gi;
+// Two lookbehinds: a candidate may not start mid-run — right after a digit or a `*` mask, or after
+// a separator that itself follows one. A dash or space after a letter (`stmt-`, `VISA-`) is fine.
+// The run is greedy and uncapped, so a run's own start always takes the whole run.
+const CARD_CANDIDATE = /(?<![\d*])(?<![\d*][ -])\d(?:[ -]?\d){12,}(?!\d)/g;
 const ROUTING_LABELLED = /(\b(?:routing|aba|rtn)\b(?:\s*(?:#|no\.?|number|:))*\s*)(\d{9})(?!\d)/gi;
 const ACCOUNT_LABELLED = /(\b(?:acct|account|a\/c|chk|checking|sav|savings)\b\.?(?:\s*(?:#|no\.?|number|:|ending(?:\s+in)?))*\s*)(\d{6,17})(?!\d)/gi;
 const BARE_NINE_DIGITS = /(?<!\d)\d{9}(?!\d)/g;
