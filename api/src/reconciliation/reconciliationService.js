@@ -4,6 +4,7 @@ const { ValidationError } = require('../errors');
 const {
   scoreMatch, scoreMerchantAndDate, amountInAdjustmentRange, MATCH_THRESHOLD, WINDOW_DAYS,
 } = require('./scoreMatch');
+const { redactText } = require('../redaction/redactSensitive');
 
 const ADJUSTMENT_REASONS = ['tip', 'tax', 'fee', 'other'];
 
@@ -123,7 +124,7 @@ async function applyAmountCorroboration(
     `INSERT INTO transaction_sources
        (transaction_id, shared_item_id, role, matched_at, match_confidence, adjustment_reason, adjustment_note)
      VALUES ($1, $2, 'corroboration', now(), $3, $4, $5)`,
-    [transactionId, sharedItemId, confidence, adjustmentReason, adjustmentNote || null]
+    [transactionId, sharedItemId, confidence, adjustmentReason, redactText(adjustmentNote) || null]
   );
 }
 
