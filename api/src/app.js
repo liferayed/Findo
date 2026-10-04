@@ -8,6 +8,7 @@ const { MAX_FILE_SIZE_BYTES, FILE_TOO_LARGE_MESSAGE } = require('./documents/val
 const {
   MAX_FILE_SIZE_BYTES: STATEMENT_MAX_FILE_SIZE_BYTES,
 } = require('./documents/validateStatementUpload');
+const { redactText } = require('./redaction/redactSensitive');
 
 function statusCodeFor(err) {
   return err.statusCode || 500;
@@ -207,7 +208,7 @@ function createApp({
       });
       res.status(200).json({
         file_ref: result.fileRef,
-        original_filename: req.file ? req.file.originalname : null,
+        original_filename: req.file ? redactText(req.file.originalname) : null,
         is_readable: result.isReadable,
         extraction: result.extraction
           ? {
@@ -342,10 +343,14 @@ function createApp({
   });
 
   app.post('/chat/messages', async (req, res) => {
-    const text = req.body && req.body.text;
-    if (typeof text !== 'string' || text.trim() === '') {
+    const rawText = req.body && req.body.text;
+    if (typeof rawText !== 'string' || rawText.trim() === '') {
       return res.status(400).json({ error: 'text is required' });
     }
+    // F1.9: redact once, at the edge — every use of `text` below (account parsing, the LLM
+    // prompt, shared_items.raw_text, clarification replies, the `received` echo) then only ever
+    // sees the redacted form.
+    const text = redactText(rawText);
 
     if (looksLikeAccountCreation(text)) {
       const parsed = parseAccountMessage(text);

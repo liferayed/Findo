@@ -91,4 +91,24 @@ describe('normalizeStatementPageExtraction', () => {
     const result = normalizeStatementPageExtraction(raw, { isFirstPage: true });
     expect(result.creditCard).toEqual({ due_date: null, minimum_payment: 35, issuer: null, credit_limit: null, apr: null });
   });
+
+  test('F1.9: transaction descriptions and header text are redacted before reaching extracted_data', () => {
+    const result = normalizeStatementPageExtraction(
+      {
+        transactions: [{ date: '2026-01-14', description: 'TRANSFER TO CHK 123456789', amount: -50 }],
+        beginning_balance: null,
+        ending_balance: null,
+        institution_name: 'Chase 4111 1111 1111 1111',
+        account_type_text: 'Checking acct 000123456789',
+        last_four: '6789',
+        credit_card: { issuer: 'Visa 4111111111111111', due_date: null, minimum_payment: 25, credit_limit: null, apr: null },
+      },
+      { isFirstPage: true }
+    );
+    expect(result.transactions[0].description).toBe('TRANSFER TO CHK ****6789');
+    expect(result.institutionName).toBe('Chase ****1111');
+    expect(result.accountTypeText).toBe('Checking acct ****6789');
+    expect(result.creditCard.issuer).toBe('Visa ****1111');
+    expect(result.lastFour).toBe('6789');
+  });
 });

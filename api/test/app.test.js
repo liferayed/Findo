@@ -760,3 +760,58 @@ describe('GET /institutions', () => {
     ]);
   });
 });
+
+describe('POST /chat/messages — F1.9 redaction', () => {
+  test('the transaction handler and the received echo only ever see redacted text', async () => {
+    let seenText;
+    const app = buildApp({
+      chatTransactionHandler: async (userId, text) => {
+        seenText = text;
+        return { statusCode: 201, reply: 'ok' };
+      },
+    });
+
+    const res = await request(app).post('/chat/messages').send({ text: 'Spent $12.50 on card 4111 1111 1111 1111' });
+
+    expect(seenText).toBe('Spent $12.50 on card ****1111');
+    expect(res.body.received).toBe('Spent $12.50 on card ****1111');
+  });
+
+  test('chat account creation parses redacted text', async () => {
+    let created;
+    const app = buildApp({
+      accountsService: {
+        createAccount: async (userId, input) => {
+          created = input;
+          return { nickname: input.nickname, institution_name: input.institution_name, type: input.type };
+        },
+      },
+      institutionsService: { resolveInstitutionAlias: async () => null },
+    });
+
+    const res = await request(app)
+      .post('/chat/messages')
+      .send({ text: 'Add my Chase checking account 4111111111111111' });
+
+    expect(res.status).toBe(201);
+    expect(JSON.stringify(created)).not.toContain('4111111111111111');
+    expect(res.body.received).toBe('Add my Chase checking account ****1111');
+  });
+});
+
+describe('POST /documents/extract — F1.9 redaction', () => {
+  test('the echoed original_filename has card numbers redacted', async () => {
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleExtract: async () => ({ fileRef: 'x', isReadable: false, extraction: null, detectedAccountId: null }),
+      },
+    });
+
+    const res = await request(app)
+      .post('/documents/extract')
+      .attach('file', Buffer.from('fake-image-bytes'), { filename: 'receipt_4111111111111111.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.original_filename).toBe('receipt_****1111.png');
+  });
+});

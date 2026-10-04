@@ -2,6 +2,7 @@ const { validateTransactionInput } = require('./validateTransactionInput');
 const { normalizeMerchant } = require('./normalizeMerchant');
 const { applyTransactionToBalance } = require('../accounts/balance');
 const { ValidationError, NotFoundError } = require('../errors');
+const { redactText } = require('../redaction/redactSensitive');
 
 const TRANSACTION_COLUMNS =
   'id, account_id, transaction_date, posted_date, amount, original_amount, merchant_raw, ' +
@@ -39,13 +40,16 @@ function createTransactionsService({ pool }) {
   }
 
   // The single INSERT + balance-update every creation path goes through (CP-004). `signedAmount`
-  // is what gets stored in transactions.amount and added to current_balance.
+  // is what gets stored in transactions.amount and added to current_balance. F1.9: merchant_raw
+  // is redacted here — the one choke point for manual (F1.3), chat, receipt and statement rows —
+  // before both it and merchant_normalized are derived.
   async function insertTransaction(client, { accountId, transactionDate, signedAmount, merchantRaw, type, isManual, reconciliationStatus }) {
+    const safeMerchantRaw = redactText(merchantRaw);
     const { rows } = await client.query(
       `INSERT INTO transactions (account_id, transaction_date, amount, merchant_raw, merchant_normalized, type, is_manual, reconciliation_status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING ${TRANSACTION_COLUMNS}`,
-      [accountId, transactionDate, signedAmount, merchantRaw, normalizeMerchant(merchantRaw), type, isManual, reconciliationStatus]
+      [accountId, transactionDate, signedAmount, safeMerchantRaw, normalizeMerchant(safeMerchantRaw), type, isManual, reconciliationStatus]
     );
     await applyTransactionToBalance(client, accountId, signedAmount);
     return rows[0];

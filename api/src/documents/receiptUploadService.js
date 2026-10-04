@@ -3,6 +3,7 @@ const { validateReceiptUpload } = require('./validateReceiptUpload');
 const { saveReceiptFile, deleteReceiptFileQuietly } = require('./receiptStorage');
 const { isValidCalendarDate } = require('../transactions/validateTransactionInput');
 const { ValidationError } = require('../errors');
+const { redactText } = require('../redaction/redactSensitive');
 
 // Matches exactly what saveReceiptFile (receiptStorage.js) produces: api/uploads/receipts/
 // followed by a randomUUID() and an extension from ALLOWED_MIME_TYPES (validateReceiptUpload.js).
@@ -106,7 +107,13 @@ function createReceiptUploadHandler({ pool, transactionsService, accountsService
   // the human is typing in what the model couldn't extract). It's used only to record what
   // actually happened to the underlying file/extraction (parse_status, is_manual on the
   // transaction) — it does not change any validation or write-path behavior otherwise.
-  async function handleConfirm(userId, { fileRef, originalFilename, channel, accountId, merchantRaw, transactionDate, amount, lineItems, isManual = false }) {
+  async function handleConfirm(userId, input) {
+    const { fileRef, channel, accountId, transactionDate, amount, lineItems, isManual = false } = input;
+    // F1.9: merchant and filename arrive from the client's confirm request (the user may have
+    // edited the merchant in the review modal), so the extraction-time redaction in
+    // validateReceiptExtraction doesn't cover them — redact before anything below reads them.
+    const merchantRaw = redactText(input.merchantRaw);
+    const originalFilename = typeof input.originalFilename === 'string' ? redactText(input.originalFilename) : null;
     const errors = [];
     if (typeof fileRef !== 'string' || !FILE_REF_PATTERN.test(fileRef)) {
       errors.push('file_ref is invalid');

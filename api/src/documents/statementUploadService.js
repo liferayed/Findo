@@ -3,6 +3,7 @@ const { enqueueStatementExtraction } = require('./statementQueue');
 const { ValidationError, NotFoundError } = require('../errors');
 const { ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } = require('./validateStatementUpload');
 const { computeDocumentStatus } = require('./documentStatus');
+const { redactText } = require('../redaction/redactSensitive');
 
 function createStatementUploadService({ pool }) {
   async function handleStatementUpload(userId, { file }) {
@@ -17,7 +18,7 @@ function createStatementUploadService({ pool }) {
     const { rows: [sharedItem] } = await pool.query(
       `INSERT INTO shared_items (user_id, channel, content_type, file_ref, original_filename, parse_status)
        VALUES ($1, 'web_upload', 'file', $2, $3, 'pending') RETURNING id`,
-      [userId, fileRef, file.originalname || null]
+      [userId, fileRef, redactText(file.originalname) || null]
     );
     await pool.query(`INSERT INTO documents (shared_item_id, document_type) VALUES ($1, 'bank_statement')`, [sharedItem.id]);
     await enqueueStatementExtraction(sharedItem.id, userId);
