@@ -71,4 +71,19 @@ describe('Header health pill (CP-007)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /All systems operational/ }));
     expect(screen.queryByText('Local LLM')).not.toBeInTheDocument();
   });
+
+  it('shows a single pull hint when chat and vision use the same missing model', async () => {
+    stubHealth({
+      status: 'ok',
+      subsystems: CORE_OK,
+      llm: {
+        status: 'degraded',
+        message: 'Model not pulled: llama3.2:3b, llama3.2:3b',
+        models: { chat: { name: 'llama3.2:3b', status: 'missing' }, vision: { name: 'llama3.2:3b', status: 'missing' } },
+      },
+    });
+    render(<Header />);
+    fireEvent.click(await screen.findByRole('button', { name: /LLM model missing/ }));
+    expect(screen.getAllByText('ollama pull llama3.2:3b')).toHaveLength(1);
+  });
 });

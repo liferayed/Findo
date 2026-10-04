@@ -15,7 +15,9 @@ async function checkHealth({ pingPostgres, pingRedis, runNoopJob, checkLlm }) {
     checkSubsystem(pingPostgres),
     checkSubsystem(pingRedis),
     checkSubsystem(runNoopJob),
-    checkLlm ? checkLlm() : Promise.resolve(undefined),
+    checkLlm
+      ? checkLlm().catch(() => ({ status: 'unavailable', message: 'LLM check failed', models: {} }))
+      : Promise.resolve(undefined),
   ]);
 
   const subsystems = { postgres, redis, queue };

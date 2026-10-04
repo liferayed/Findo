@@ -127,13 +127,13 @@ export function Header() {
                     </p>
                   )}
                   {health.llm.status === 'degraded' &&
-                    Object.values(health.llm.models)
-                      .filter((model) => model.status === 'missing')
-                      .map((model) => (
-                        <p key={model.name} className="mt-2 text-xs text-stone-500">
-                          <code>ollama pull {model.name}</code>
+                    [...new Set(Object.values(health.llm.models).filter((model) => model.status === 'missing').map((model) => model.name))].map(
+                      (name) => (
+                        <p key={name} className="mt-2 text-xs text-stone-500">
+                          <code>ollama pull {name}</code>
                         </p>
-                      ))}
+                      ),
+                    )}
                 </div>
               )}
             </div>

@@ -88,4 +88,17 @@ describe('checkHealth', () => {
     const result = await checkHealth({ pingPostgres: async () => {}, pingRedis: async () => {}, runNoopJob: async () => {} });
     expect(result).not.toHaveProperty('llm');
   });
+
+  test('CP-007: a rejecting checkLlm reports the LLM unavailable and never affects the core status', async () => {
+    const result = await checkHealth({
+      pingPostgres: async () => {},
+      pingRedis: async () => {},
+      runNoopJob: async () => {},
+      checkLlm: async () => {
+        throw new Error('boom');
+      },
+    });
+    expect(result.status).toBe('ok');
+    expect(result.llm).toEqual({ status: 'unavailable', message: 'LLM check failed', models: {} });
+  });
 });
