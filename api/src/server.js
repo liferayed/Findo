@@ -10,6 +10,7 @@ const { createTransactionsService } = require('./transactions/transactionsServic
 const { getCurrentUserId } = require('./currentUser');
 const { extractTransaction } = require('./llm/ollamaClient');
 const { extractReceipt, extractStatementPage } = require('./llm/ollamaVisionClient');
+const { checkLlm } = require('./llm/checkLlm');
 const { createChatTransactionHandler } = require('./chat/chatTransactionHandler');
 const { createReceiptUploadHandler } = require('./documents/receiptUploadService');
 const { createDocumentsService } = require('./documents/documentsService');
@@ -40,7 +41,14 @@ const statementReviewService = createStatementReviewService({ pool });
 const statementConfirmService = createStatementConfirmService({ pool, transactionsService });
 
 const app = createApp({
-  checkHealth: () => checkHealth({ pingPostgres, pingRedis, runNoopJob }),
+  checkHealth: () =>
+    checkHealth({
+      pingPostgres,
+      pingRedis,
+      runNoopJob,
+      checkLlm: () =>
+        checkLlm({ baseUrl: config.ollamaBaseUrl, models: { chat: config.ollamaModel, vision: config.ollamaVisionModel } }),
+    }),
   accountsService,
   institutionsService,
   transactionsService,

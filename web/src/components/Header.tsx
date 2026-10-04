@@ -3,9 +3,16 @@ import { StatusDot } from './ui/StatusDot';
 import { Button } from './ui/Button';
 
 type SubsystemStatus = { status: 'ok' | 'error'; message?: string };
+type LlmModelStatus = { name: string; status: 'ok' | 'missing' | 'unknown' };
+type LlmHealth = {
+  status: 'ok' | 'degraded' | 'unavailable';
+  message?: string;
+  models: Record<string, LlmModelStatus>;
+};
 type HealthResponse = {
   status: 'ok' | 'degraded';
   subsystems: Record<string, SubsystemStatus>;
+  llm?: LlmHealth;
 };
 
 export function Header() {
@@ -32,15 +39,29 @@ export function Header() {
     checkHealth();
   }, []);
 
-  const tone = error ? 'error' : health ? (health.status === 'ok' ? 'ok' : 'error') : 'unknown';
+  // CP-007: the LLM only affects the pill while the core is healthy — core problems stay red.
+  const llmStatus = health && health.status === 'ok' ? health.llm?.status : undefined;
+  const tone = error
+    ? 'error'
+    : health
+      ? health.status !== 'ok'
+        ? 'error'
+        : llmStatus && llmStatus !== 'ok'
+          ? 'warning'
+          : 'ok'
+      : 'unknown';
   const label = loading
     ? 'Checking API...'
     : error
       ? 'Unable to reach API'
       : health
-        ? health.status === 'ok'
-          ? 'All systems operational'
-          : 'Degraded'
+        ? health.status !== 'ok'
+          ? 'Degraded'
+          : llmStatus === 'unavailable'
+            ? 'LLM offline'
+            : llmStatus === 'degraded'
+              ? 'LLM model missing'
+              : 'All systems operational'
         : 'Unknown';
 
   return (
@@ -85,6 +106,35 @@ export function Header() {
                     </li>
                   ))}
                 </ul>
+              )}
+
+              {health?.llm && (
+                <div className="mt-3 border-t border-stone-100 pt-3">
+                  <span className="text-xs font-medium uppercase tracking-wide text-stone-400">Local LLM</span>
+                  <ul className="mt-2 space-y-1">
+                    {Object.entries(health.llm.models).map(([role, model]) => (
+                      <li key={role} className="flex items-center gap-2 text-sm text-stone-700">
+                        <StatusDot tone={model.status === 'ok' ? 'ok' : model.status === 'missing' ? 'warning' : 'unknown'} />
+                        <span className="font-medium">{role}</span>
+                        <span className="text-stone-500">{model.name}</span>
+                        <span className="text-stone-400">{model.status}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {health.llm.status === 'unavailable' && (
+                    <p className="mt-2 text-xs text-stone-500">
+                      Start Ollama on the host: <code>ollama serve</code>
+                    </p>
+                  )}
+                  {health.llm.status === 'degraded' &&
+                    [...new Set(Object.values(health.llm.models).filter((model) => model.status === 'missing').map((model) => model.name))].map(
+                      (name) => (
+                        <p key={name} className="mt-2 text-xs text-stone-500">
+                          <code>ollama pull {name}</code>
+                        </p>
+                      ),
+                    )}
+                </div>
               )}
             </div>
           )}

@@ -1,4 +1,4 @@
-type Tone = 'ok' | 'error' | 'unknown';
+type Tone = 'ok' | 'warning' | 'error' | 'unknown';
 
 type Props = {
   tone: Tone;
@@ -6,6 +6,7 @@ type Props = {
 
 const dotColors: Record<Tone, string> = {
   ok: 'bg-emerald-500',
+  warning: 'bg-amber-500',
   error: 'bg-rose-500',
   unknown: 'bg-slate-300',
 };
