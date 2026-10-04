@@ -1,5 +1,21 @@
 const { validateAccountInput } = require('./validateAccountInput');
 const { ValidationError, ConflictError, NotFoundError } = require('../errors');
+const { redactText, redactLastFourInput } = require('../redaction/redactSensitive');
+
+// F1.9: account input is user-typed (web form, chat, statement account offer) — every path goes
+// through createAccount/updateAccount, so redacting here covers all of them. last_four is
+// accept-and-truncate: a pasted full number becomes its last 4 *before* validation runs.
+function redactAccountInput(input) {
+  if (!input || typeof input !== 'object') {
+    return input;
+  }
+  return {
+    ...input,
+    nickname: redactText(input.nickname),
+    institution_name: redactText(input.institution_name),
+    last_four: redactLastFourInput(input.last_four),
+  };
+}
 
 const ACCOUNT_COLUMNS =
   'id, user_id, type, institution_name, nickname, last_four, current_balance, opening_balance, balance_as_of_date, currency, is_active, created_at';
@@ -11,7 +27,8 @@ function createAccountsService({ pool }) {
   // as transactionsService.createTransactionFromStatement. Defaults to `pool` when no client is
   // given, same as every other method here.
   async function createAccount(userId, input, { client } = {}) {
-    const errors = validateAccountInput(input);
+    const safeInput = redactAccountInput(input);
+    const errors = validateAccountInput(safeInput);
     if (errors.length > 0) {
       throw new ValidationError(errors);
     }
@@ -22,12 +39,12 @@ function createAccountsService({ pool }) {
         `INSERT INTO accounts (user_id, type, institution_name, nickname, last_four)
          VALUES ($1, $2, $3, $4, $5)
          RETURNING ${ACCOUNT_COLUMNS}`,
-        [userId, input.type, input.institution_name, input.nickname, input.last_four || null]
+        [userId, safeInput.type, safeInput.institution_name, safeInput.nickname, safeInput.last_four || null]
       );
       return rows[0];
     } catch (err) {
       if (err.code === '23505') {
-        throw new ConflictError(`an account named "${input.nickname}" already exists`);
+        throw new ConflictError(`an account named "${safeInput.nickname}" already exists`);
       }
       throw err;
     }
@@ -42,6 +59,7 @@ function createAccountsService({ pool }) {
   }
 
   async function updateAccount(userId, accountId, input) {
+    input = redactAccountInput(input);
     const fields = [];
     const values = [];
 
