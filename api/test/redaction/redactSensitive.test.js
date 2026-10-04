@@ -95,3 +95,68 @@ describe('redactLastFourInput', () => {
     expect(redactLastFourInput(undefined)).toBeUndefined();
   });
 });
+
+// Seeded (mulberry32) so these property tests are deterministic — never flaky.
+function seededRandom(seed) {
+  let a = seed;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function luhnCheckDigit(body) {
+  let sum = 0;
+  let double = true;
+  for (let i = body.length - 1; i >= 0; i -= 1) {
+    let d = Number(body[i]);
+    if (double) {
+      d *= 2;
+      if (d > 9) {
+        d -= 9;
+      }
+    }
+    sum += d;
+    double = !double;
+  }
+  return String((10 - (sum % 10)) % 10);
+}
+
+describe('redactText — properties', () => {
+  test('a grouped card next to other digit groups never keeps 8+ of its digits in place', () => {
+    const random = seededRandom(19);
+    const int = (n) => Math.floor(random() * n);
+    const digitString = (n) => Array.from({ length: n }, () => int(10)).join('');
+    const leaks = [];
+    for (let i = 0; i < 5000; i += 1) {
+      const body = String(3 + int(4)) + digitString(14);
+      const card = body + luhnCheckDigit(body);
+      const grouped = card.match(/.{1,4}/g).join(int(2) ? ' ' : '-');
+      const prefix = [digitString(5), digitString(4), digitString(3), ''][int(4)];
+      const suffix = ['', ` ${digitString(2)} ${digitString(2)}`, ` ${digitString(3)}`][int(3)];
+      const text = `ref ${prefix} ${grouped}${suffix} end`;
+      const compact = redactText(text).replace(/[ -]/g, '');
+      if ([card.slice(0, 8), card.slice(4, 12), card.slice(8)].some((part) => compact.includes(part))) {
+        leaks.push(text);
+      }
+    }
+    expect(leaks).toEqual([]);
+  });
+
+  test('redacting twice always equals redacting once', () => {
+    const random = seededRandom(7);
+    const int = (n) => Math.floor(random() * n);
+    const changed = [];
+    for (let i = 0; i < 5000; i += 1) {
+      const groups = Array.from({ length: 2 + int(7) }, () => Array.from({ length: 1 + int(7) }, () => int(10)).join(''));
+      const text = `x ${groups.map((g, j) => (j ? (int(2) ? ' ' : '-') : '') + g).join('')}`;
+      const once = redactText(text);
+      if (redactText(once) !== once) {
+        changed.push(text);
+      }
+    }
+    expect(changed).toEqual([]);
+  });
+});

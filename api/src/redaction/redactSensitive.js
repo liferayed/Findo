@@ -45,42 +45,66 @@ function isPlausibleSsn(area, group, serial) {
 }
 
 // A digit run (groups joined by single spaces/dashes) can hold a card next to other numbers — an
-// expiry `4111…1111 05/27`, a CVV, a preceding ZIP — or several cards in a row. Walk the run's
-// groups left to right: at each group, mask the longest span of whole groups that totals 13–19
-// digits and passes Luhn, then continue after it. Whole groups only — not arbitrary substrings —
-// so unrelated numbers aren't masked by chance.
+// expiry `4111…1111 05/27`, a CVV, a preceding ZIP — or several cards in a row. Collect every span
+// of whole groups that totals 13–19 digits and passes Luhn, merge spans that share a group into a
+// cluster, and mask each cluster whole: a chance-valid span that only overlaps the real card can't
+// leave the rest of the card exposed. Whole groups only — not arbitrary substrings — so unrelated
+// numbers aren't masked by chance.
 function maskCardCandidate(match) {
-  const parts = match.split(/([ -])/); // digit groups at even indexes, separators at odd
-  const out = [];
-  let start = 0;
-  while (start < parts.length) {
-    let found = -1;
-    let best = '';
-    let span = '';
-    for (let end = start; end < parts.length; end += 2) {
-      span += parts[end];
-      if (span.length > 19) {
+  const groups = match.split(/[ -]/);
+  const separators = match.match(/[ -]/g) || [];
+
+  const spans = [];
+  for (let start = 0; start < groups.length; start += 1) {
+    let digits = '';
+    for (let end = start; end < groups.length; end += 1) {
+      digits += groups[end];
+      if (digits.length > 19) {
         break;
       }
-      if (span.length >= 13 && passesLuhn(span)) {
-        found = end;
-        best = span;
+      if (digits.length >= 13 && passesLuhn(digits)) {
+        spans.push({ start, end, digits });
       }
     }
-    if (found === -1) {
-      out.push(parts[start], parts[start + 1] ?? '');
-      start += 2;
+  }
+  if (spans.length === 0) {
+    return match;
+  }
+
+  const clusters = [];
+  for (const span of spans) {
+    const last = clusters[clusters.length - 1];
+    if (last && span.start <= last.end) {
+      last.end = Math.max(last.end, span.end);
+      last.members.push(span);
     } else {
-      out.push(maskLastFour(best), parts[found + 1] ?? '');
-      start = found + 2;
+      clusters.push({ start: span.start, end: span.end, members: [span] });
     }
   }
-  return out.join('');
+
+  let out = '';
+  let group = 0;
+  for (const cluster of clusters) {
+    for (; group < cluster.start; group += 1) {
+      out += groups[group] + separators[group];
+    }
+    // Show the last 4 of a typical-length card (15/16 digits) when the cluster has one.
+    const shown = cluster.members.find((s) => s.digits.length === 16 || s.digits.length === 15) || cluster.members[0];
+    out += maskLastFour(shown.digits);
+    group = cluster.end + 1;
+    if (group < groups.length) {
+      out += separators[cluster.end];
+    }
+  }
+  for (; group < groups.length; group += 1) {
+    out += groups[group] + (group < separators.length ? separators[group] : '');
+  }
+  return out;
 }
 
 const SSN_FORMATTED = /(?<!\d)(\d{3})([- ])(\d{2})\2(\d{4})(?!\d)/g;
 const SSN_LABELLED = /(\b(?:ssn\b|ss#|social\s+security\b)[^\d]{0,20})(\d{9})(?!\d)/gi;
-const CARD_CANDIDATE = /(?<![\d-])\d(?:[ -]?\d){12,}(?!\d)/g;
+const CARD_CANDIDATE = /(?<![\d*-])\d(?:[ -]?\d){12,}(?!\d)/g;
 const ROUTING_LABELLED = /(\b(?:routing|aba|rtn)\b(?:\s*(?:#|no\.?|number|:))*\s*)(\d{9})(?!\d)/gi;
 const ACCOUNT_LABELLED = /(\b(?:acct|account|a\/c|chk|checking|sav|savings)\b\.?(?:\s*(?:#|no\.?|number|:|ending(?:\s+in)?))*\s*)(\d{6,17})(?!\d)/gi;
 const BARE_NINE_DIGITS = /(?<!\d)\d{9}(?!\d)/g;
