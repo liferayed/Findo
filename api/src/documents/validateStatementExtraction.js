@@ -1,4 +1,5 @@
 const { isValidCalendarDate } = require('../transactions/validateTransactionInput');
+const { redactText } = require('../redaction/redactSensitive');
 
 function coerceToNumber(value) {
   const num = typeof value === 'string' ? Number(value) : value;
@@ -22,7 +23,7 @@ function normalizeTransactionRow(row) {
     return null;
   }
   const date = coerceToNullableString(row.date);
-  const description = coerceToNullableString(row.description);
+  const description = redactText(coerceToNullableString(row.description));
   const amount = coerceToNumber(row.amount);
   if (!date || !isValidCalendarDate(date) || !description || amount === null) {
     return null;
@@ -43,7 +44,7 @@ function normalizeCreditCardFields(raw) {
   const normalized = {
     due_date: dueDate && isValidCalendarDate(dueDate) ? dueDate : null,
     minimum_payment: coerceToNullableNumber(raw.minimum_payment),
-    issuer: coerceToNullableString(raw.issuer),
+    issuer: redactText(coerceToNullableString(raw.issuer)),
     credit_limit: coerceToNullableNumber(raw.credit_limit),
     apr: coerceToNullableNumber(raw.apr),
   };
@@ -65,8 +66,8 @@ function normalizeStatementPageExtraction(raw, { isFirstPage } = {}) {
     transactions,
     beginningBalance: coerceToNumber(source.beginning_balance),
     endingBalance: coerceToNumber(source.ending_balance),
-    institutionName: isFirstPage ? coerceToNullableString(source.institution_name) : null,
-    accountTypeText: isFirstPage ? coerceToNullableString(source.account_type_text) : null,
+    institutionName: isFirstPage ? redactText(coerceToNullableString(source.institution_name)) : null,
+    accountTypeText: isFirstPage ? redactText(coerceToNullableString(source.account_type_text)) : null,
     lastFour: (() => {
       const lastFourStr = typeof source.last_four === 'string' ? source.last_four : String(source.last_four ?? '');
       return isFirstPage && /^\d{4}$/.test(lastFourStr) ? lastFourStr : null;

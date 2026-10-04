@@ -1,5 +1,6 @@
 const { parseReceiptDate } = require('./parseReceiptDate');
 const { coerceToPositiveNumber } = require('../llm/coerceToPositiveNumber');
+const { redactText } = require('../redaction/redactSensitive');
 
 const FALLBACK_MERCHANT = 'Receipt';
 
@@ -18,7 +19,7 @@ function normalizeLineItems(rawLineItems) {
   return rawLineItems
     .filter((item) => item && typeof item === 'object')
     .map((item) => ({
-      description: normalizedString(item.description) || 'Item',
+      description: redactText(normalizedString(item.description)) || 'Item',
       amount: coerceToPositiveNumber(item.amount),
     }))
     .filter((item) => item.amount !== null);
@@ -65,7 +66,7 @@ function normalizeReceiptExtraction(raw, { now } = {}) {
     };
   }
 
-  const merchantRaw = normalizedString(source.merchant) || FALLBACK_MERCHANT;
+  const merchantRaw = redactText(normalizedString(source.merchant)) || FALLBACK_MERCHANT;
   const transactionDate = parseReceiptDate(source.date, now);
   const lineItems = normalizeLineItems(source.line_items);
   const cardLastFour = normalizeCardLastFour(source.card_last_four);

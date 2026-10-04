@@ -1,4 +1,5 @@
 const { coerceToPositiveNumber } = require('../llm/coerceToPositiveNumber');
+const { redactText } = require('../redaction/redactSensitive');
 
 const VALID_TYPES = new Set(['debit', 'credit']);
 
@@ -22,7 +23,9 @@ function normalizeExtraction(raw) {
   const isTransaction = source.is_transaction === true;
   const amount = coerceToPositiveNumber(source.amount);
   const type = VALID_TYPES.has(source.type) ? source.type : null;
-  const merchant = normalizedString(source.merchant);
+  // F1.9: the chat text is already redacted before it reaches the model (app.js), but the model
+  // can reformat digits on the way out — redact its output too (defense in depth).
+  const merchant = redactText(normalizedString(source.merchant));
   const dateHint = normalizedString(source.date_hint);
   const accountHint = normalizedString(source.account_hint);
 

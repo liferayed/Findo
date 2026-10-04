@@ -177,4 +177,19 @@ describe('normalizeReceiptExtraction', () => {
     const result = normalizeReceiptExtraction({ merchant: null, date: null, total: null, line_items: [], card_last_four: null });
     expect(result.cardLastFour).toBeNull();
   });
+
+  test('F1.9: merchant and line-item descriptions are redacted (and so is the summary built from them)', () => {
+    const result = normalizeReceiptExtraction(
+      {
+        merchant: 'Store 4111 1111 1111 1111',
+        date: '01/15/2026',
+        total: 20,
+        line_items: [{ description: 'Gift card 4111111111111111', amount: 20 }],
+      },
+      { now: NOW }
+    );
+    expect(result.merchantRaw).toBe('Store ****1111');
+    expect(result.lineItems[0].description).toBe('Gift card ****1111');
+    expect(result.summary).toBe('Store ****1111 — $20.00 (1 item)');
+  });
 });

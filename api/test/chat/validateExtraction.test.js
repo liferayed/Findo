@@ -77,4 +77,9 @@ describe('normalizeExtraction', () => {
     expect(result.dateHint).toBeNull();
     expect(result.accountHint).toBeNull();
   });
+
+  test('F1.9: a merchant the model echoed with a full card number is redacted', () => {
+    const result = normalizeExtraction({ is_transaction: true, amount: 12.5, type: 'debit', merchant: 'Coffee 4111111111111111' });
+    expect(result.merchant).toBe('Coffee ****1111');
+  });
 });
