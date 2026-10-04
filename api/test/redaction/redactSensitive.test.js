@@ -9,6 +9,12 @@ describe('redactText', () => {
     ['Amex 378282246310005', 'Amex ****0005'],
     ['card 4000000000000000006', 'card ****0006'],
     ['stmt_4111111111111111.pdf', 'stmt_****1111.pdf'],
+    ['exp 4111111111111111 05/27', 'exp ****1111 05/27'],
+    ['paid 4111111111111111 25.00', 'paid ****1111 25.00'],
+    ['cvv 4111 1111 1111 1111 123', 'cvv ****1111 123'],
+    ['zip 94105 4111111111111111', 'zip 94105 ****1111'],
+    ['two 4111111111111111 4111111111111111', 'two ****1111 ****1111'],
+    ['amex 3782-822463-10005 exp', 'amex ****0005 exp'],
     // SSNs: removed entirely
     ['SSN 123-45-6789', 'SSN [REDACTED]'],
     ['ssn 123 45 6789', 'ssn [REDACTED]'],
@@ -38,6 +44,8 @@ describe('redactText', () => {
     'already [REDACTED] here',
     'SSN 000-12-3456', // impossible SSN (area 000)
     'AMAZON MKTPLACE PMTS AMZN.COM/BILL WA',
+    'items 1234 5678 9012 3456 7',
+    'qty 12 34 56 78 90 12 34',
   ])('leaves %j unchanged', (input) => {
     expect(redactText(input)).toBe(input);
   });

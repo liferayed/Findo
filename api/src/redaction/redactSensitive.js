@@ -44,6 +44,31 @@ function isPlausibleSsn(area, group, serial) {
   return area !== '000' && area !== '666' && area[0] !== '9' && group !== '00' && serial !== '0000';
 }
 
+// A greedy candidate can swallow neighbouring digits (an expiry `4111…1111 05/27`, a CVV, a
+// preceding ZIP) and then fail Luhn as a whole. Retry each contiguous run of separator-delimited
+// groups totalling 13–19 digits and mask the first that passes. Whole groups only — not arbitrary
+// substrings — so unrelated numbers aren't masked by chance.
+function maskCardCandidate(match) {
+  const digits = match.replace(/\D/g, '');
+  if (passesLuhn(digits)) {
+    return maskLastFour(digits);
+  }
+  const parts = match.split(/([ -])/); // digit groups at even indexes, separators at odd
+  for (let start = 0; start < parts.length; start += 2) {
+    let span = '';
+    for (let end = start; end < parts.length; end += 2) {
+      span += parts[end];
+      if (span.length > 19) {
+        break;
+      }
+      if (span.length >= 13 && passesLuhn(span)) {
+        return `${parts.slice(0, start).join('')}${maskLastFour(span)}${parts.slice(end + 1).join('')}`;
+      }
+    }
+  }
+  return match;
+}
+
 const SSN_FORMATTED = /(?<!\d)(\d{3})([- ])(\d{2})\2(\d{4})(?!\d)/g;
 const SSN_LABELLED = /(\b(?:ssn\b|ss#|social\s+security\b)[^\d]{0,20})(\d{9})(?!\d)/gi;
 const CARD_CANDIDATE = /(?<![\d-])\d(?:[ -]?\d){12,18}(?!\d)/g;
@@ -58,10 +83,7 @@ function redactText(value) {
   return value
     .replace(SSN_FORMATTED, (match, area, _sep, group, serial) => (isPlausibleSsn(area, group, serial) ? REDACTED : match))
     .replace(SSN_LABELLED, (_match, label) => `${label}${REDACTED}`)
-    .replace(CARD_CANDIDATE, (match) => {
-      const digits = match.replace(/\D/g, '');
-      return passesLuhn(digits) ? maskLastFour(digits) : match;
-    })
+    .replace(CARD_CANDIDATE, maskCardCandidate)
     .replace(ROUTING_LABELLED, (_match, label) => `${label}${REDACTED}`)
     .replace(ACCOUNT_LABELLED, (_match, label, digits) => `${label}${maskLastFour(digits)}`)
     .replace(BARE_NINE_DIGITS, (match) => (isValidRoutingNumber(match) ? REDACTED : match));
