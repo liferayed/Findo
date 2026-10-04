@@ -56,4 +56,36 @@ describe('checkHealth', () => {
     expect(result.status).toBe('degraded');
     expect(result.subsystems.queue).toEqual({ status: 'error', message: 'job timed out' });
   });
+
+  const LLM_UNAVAILABLE = {
+    status: 'unavailable',
+    message: 'Ollama not reachable at http://ollama.test:11434',
+    models: { chat: { name: 'llama3.2:3b', status: 'unknown' }, vision: { name: 'qwen2.5vl:3b', status: 'unknown' } },
+  };
+
+  test('CP-007: includes the llm result as a separate top-level key', async () => {
+    const result = await checkHealth({
+      pingPostgres: async () => {},
+      pingRedis: async () => {},
+      runNoopJob: async () => {},
+      checkLlm: async () => LLM_UNAVAILABLE,
+    });
+    expect(result.llm).toEqual(LLM_UNAVAILABLE);
+    expect(Object.keys(result.subsystems)).toEqual(['postgres', 'redis', 'queue']);
+  });
+
+  test('CP-007: an unavailable LLM does not degrade the core status', async () => {
+    const result = await checkHealth({
+      pingPostgres: async () => {},
+      pingRedis: async () => {},
+      runNoopJob: async () => {},
+      checkLlm: async () => LLM_UNAVAILABLE,
+    });
+    expect(result.status).toBe('ok');
+  });
+
+  test('CP-007: without checkLlm the response has no llm key (unchanged shape)', async () => {
+    const result = await checkHealth({ pingPostgres: async () => {}, pingRedis: async () => {}, runNoopJob: async () => {} });
+    expect(result).not.toHaveProperty('llm');
+  });
 });
