@@ -50,12 +50,15 @@ function isPlausibleSsn(area, group, serial) {
 // cluster, and mask each cluster whole: a chance-valid span that only overlaps the real card can't
 // leave the rest of the card exposed. Whole groups only — not arbitrary substrings — so unrelated
 // numbers aren't masked by chance.
-function maskCardCandidate(match) {
+function maskCardCandidate(match, offset, whole) {
+  // A run that begins with an existing mask's last 4 (`****1234 …`) must not reuse those digits —
+  // otherwise re-redacting already-redacted text could mask them again (non-idempotent).
+  const firstStart = whole.slice(offset - 4, offset) === '****' && /^\d{4}(?!\d)/.test(match) ? 1 : 0;
   const groups = match.split(/[ -]/);
   const separators = match.match(/[ -]/g) || [];
 
   const spans = [];
-  for (let start = 0; start < groups.length; start += 1) {
+  for (let start = firstStart; start < groups.length; start += 1) {
     let digits = '';
     for (let end = start; end < groups.length; end += 1) {
       digits += groups[end];
@@ -104,10 +107,10 @@ function maskCardCandidate(match) {
 
 const SSN_FORMATTED = /(?<!\d)(\d{3})([- ])(\d{2})\2(\d{4})(?!\d)/g;
 const SSN_LABELLED = /(\b(?:ssn\b|ss#|social\s+security\b)[^\d\]]{0,20})(\d{9})(?!\d)/gi;
-// Two lookbehinds: a candidate may not start mid-run — right after a digit or a `*` mask, or after
-// a separator that itself follows one. A dash or space after a letter (`stmt-`, `VISA-`) is fine.
-// The run is greedy and uncapped, so a run's own start always takes the whole run.
-const CARD_CANDIDATE = /(?<![\d*])(?<![\d*][ -])\d(?:[ -]?\d){12,}(?!\d)/g;
+// A candidate may not start mid-run: not right after a digit, nor after a separator that follows a
+// digit. The run is greedy and uncapped, so a run's own start always takes the whole run. Letters,
+// `*` and other punctuation before it are fine (`stmt-4111…`, `VISA-4111…`, `SQ *4111…`, `****1234 4111…`).
+const CARD_CANDIDATE = /(?<!\d)(?<!\d[ -])\d(?:[ -]?\d){12,}(?!\d)/g;
 const ROUTING_LABELLED = /(\b(?:routing|aba|rtn)\b(?:\s*(?:#|no\.?|number|:))*\s*)(\d{9})(?!\d)/gi;
 const ACCOUNT_LABELLED = /(\b(?:acct|account|a\/c|chk|checking|sav|savings)\b\.?(?:\s*(?:#|no\.?|number|:|ending(?:\s+in)?))*\s*)(\d{6,17})(?!\d)/gi;
 const BARE_NINE_DIGITS = /(?<!\d)\d{9}(?!\d)/g;

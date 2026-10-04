@@ -35,6 +35,10 @@ describe('redactText', () => {
     ['zip 94105 4111-1111-1111-1111 exp 05 27', 'zip 94105 ****1111 exp 05 27'],
     ['three 4111 1111 1111 1111 378282246310005 4000000000000000006', 'three ****1111 ****0005 ****0006'],
     ['checking 000123456789', 'checking ****6789'],
+    ['****1111 4111 1111 1111 1111', '****1111 ****1111'],
+    ['Visa ****4821 4111111111111111', 'Visa ****4821 ****1111'],
+    ['SQ *4111 1111 1111 1111', 'SQ *****1111'],
+    ['AMZN*12345 6322545424320002', 'AMZN*12345 ****0002'],
     ['stmt-4111111111111111.pdf', 'stmt-****1111.pdf'],
     ['receipt-4111111111111111.png', 'receipt-****1111.png'],
     ['VISA-4111111111111111', 'VISA-****1111'],
@@ -62,6 +66,7 @@ describe('redactText', () => {
     'qty 12 34 56 78 90 12 34',
     '20-digit 41111111111111111111',
     'Total Checking 2026 statement',
+    'paid ****4821 1234 5678 9012 3456',
   ])('leaves %j unchanged', (input) => {
     expect(redactText(input)).toBe(input);
   });
@@ -140,7 +145,7 @@ describe('redactText — properties', () => {
       const body = String(3 + int(4)) + digitString(14);
       const card = body + luhnCheckDigit(body);
       const grouped = card.match(/.{1,4}/g).join(int(2) ? ' ' : '-');
-      const prefix = [digitString(5), digitString(4), digitString(3), '', 'VISA-', 'stmt-', `${digitString(4)}-`][int(7)];
+      const prefix = [digitString(5), digitString(4), digitString(3), '', 'VISA-', 'stmt-', `${digitString(4)}-`, `****${digitString(4)}`, '*', `AMZN*${digitString(5)}`][int(10)];
       const suffix = ['', ` ${digitString(2)} ${digitString(2)}`, ` ${digitString(3)}`][int(3)];
       const text = prefix.endsWith('-') && int(2) ? `ref ${prefix}${grouped}${suffix} end` : `ref ${prefix} ${grouped}${suffix} end`;
       const compact = redactText(text).replace(/[ -]/g, '');
@@ -174,7 +179,7 @@ describe('redactText — properties', () => {
       () => 'SSN', () => 'ss#', () => 'social security', () => 'routing', () => 'acct', () => 'checking', () => 'ending in',
       () => 'VISA-', () => ':', () => '#', () => digitString(9), () => digitString(9),
       () => `${digitString(3)}-${digitString(2)}-${digitString(4)}`,
-      () => digitString(4), () => digitString(4), () => digitString(12), () => digitString(16), () => 'TRANSFER',
+      () => digitString(4), () => digitString(4), () => digitString(12), () => digitString(16), () => `****${digitString(4)}`, () => '[REDACTED]', () => 'TRANSFER',
     ];
     const changed = [];
     for (let i = 0; i < 5000; i += 1) {
