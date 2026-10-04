@@ -12,6 +12,11 @@ describe('normalizeMerchant', () => {
     expect(normalizeMerchant(raw)).toBe(expected);
   });
 
+  test('F1.9: the [REDACTED] marker and masked numbers contribute no tokens', () => {
+    expect(normalizeMerchant('ZELLE TO [REDACTED]')).toBe('zelle to');
+    expect(normalizeMerchant('TRANSFER TO CHK ****6789')).toBe('transfer to chk');
+  });
+
   test('returns empty string for empty or non-string input', () => {
     expect(normalizeMerchant('')).toBe('');
     expect(normalizeMerchant(null)).toBe('');

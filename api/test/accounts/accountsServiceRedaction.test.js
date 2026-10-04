@@ -45,4 +45,12 @@ describe('accountsService — F1.9 redaction', () => {
     // UPDATE params: [nickname, accountId, userId]
     expect(pool.calls[0].params[0]).toBe('Visa ****1111');
   });
+
+  test('updateAccount rejects a non-string nickname without touching the database', async () => {
+    const pool = fakePool();
+    await expect(
+      createAccountsService({ pool }).updateAccount('user-1', 'acc-1', { nickname: 4111111111111111 })
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(pool.query).not.toHaveBeenCalled();
+  });
 });

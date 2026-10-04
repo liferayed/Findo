@@ -29,6 +29,14 @@ describe('redactText', () => {
     ['ONLINE TRANSFER TO CHK 123456789 REF', 'ONLINE TRANSFER TO CHK ****6789 REF'],
     ['ZELLE TO JOHN ACCT: 987654321', 'ZELLE TO JOHN ACCT: ****4321'],
     ['Routing #: 021000021 account 000123456789', 'Routing #: [REDACTED] account ****6789'],
+    ['zip 94105 4111 1111 1111 1111', 'zip 94105 ****1111'],
+    ['REF 1234 4111 1111 1111 1111', 'REF 1234 ****1111'],
+    ['1234-4111-1111-1111-1111', '1234-****1111'],
+    ['zip 94105 4111-1111-1111-1111 exp 05 27', 'zip 94105 ****1111 exp 05 27'],
+    ['three 4111 1111 1111 1111 378282246310005 4000000000000000006', 'three ****1111 ****0005 ****0006'],
+    ['checking 000123456789', 'checking ****6789'],
+    ['savings acct 000123456789', 'savings acct ****6789'],
+    ['acct ending in 000123456789', 'acct ending in ****6789'],
   ])('redacts %j', (input, expected) => {
     expect(redactText(input)).toBe(expected);
   });
@@ -46,6 +54,8 @@ describe('redactText', () => {
     'AMAZON MKTPLACE PMTS AMZN.COM/BILL WA',
     'items 1234 5678 9012 3456 7',
     'qty 12 34 56 78 90 12 34',
+    '20-digit 41111111111111111111',
+    'Total Checking 2026 statement',
   ])('leaves %j unchanged', (input) => {
     expect(redactText(input)).toBe(input);
   });

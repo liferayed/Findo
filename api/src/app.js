@@ -208,7 +208,7 @@ function createApp({
       });
       res.status(200).json({
         file_ref: result.fileRef,
-        original_filename: req.file ? req.file.originalname : null,
+        original_filename: req.file ? redactText(req.file.originalname) : null,
         is_readable: result.isReadable,
         extraction: result.extraction
           ? {

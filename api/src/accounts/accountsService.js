@@ -60,6 +60,9 @@ function createAccountsService({ pool }) {
 
   async function updateAccount(userId, accountId, input) {
     input = redactAccountInput(input);
+    if (input && input.nickname !== undefined && typeof input.nickname !== 'string') {
+      throw new ValidationError(['nickname must be a string']);
+    }
     const fields = [];
     const values = [];
 

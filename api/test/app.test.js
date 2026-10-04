@@ -798,3 +798,20 @@ describe('POST /chat/messages — F1.9 redaction', () => {
     expect(res.body.received).toBe('Add my Chase checking account ****1111');
   });
 });
+
+describe('POST /documents/extract — F1.9 redaction', () => {
+  test('the echoed original_filename has card numbers redacted', async () => {
+    const app = buildApp({
+      receiptUploadHandler: {
+        handleExtract: async () => ({ fileRef: 'x', isReadable: false, extraction: null, detectedAccountId: null }),
+      },
+    });
+
+    const res = await request(app)
+      .post('/documents/extract')
+      .attach('file', Buffer.from('fake-image-bytes'), { filename: 'receipt_4111111111111111.png', contentType: 'image/png' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.original_filename).toBe('receipt_****1111.png');
+  });
+});

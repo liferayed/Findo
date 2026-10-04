@@ -124,7 +124,7 @@ async function applyAmountCorroboration(
     `INSERT INTO transaction_sources
        (transaction_id, shared_item_id, role, matched_at, match_confidence, adjustment_reason, adjustment_note)
      VALUES ($1, $2, 'corroboration', now(), $3, $4, $5)`,
-    [transactionId, sharedItemId, confidence, adjustmentReason, redactText(adjustmentNote) || null]
+    [transactionId, sharedItemId, confidence, adjustmentReason, typeof adjustmentNote === 'string' ? redactText(adjustmentNote) || null : null]
   );
 }
 

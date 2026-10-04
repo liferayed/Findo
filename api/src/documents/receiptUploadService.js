@@ -113,7 +113,7 @@ function createReceiptUploadHandler({ pool, transactionsService, accountsService
     // edited the merchant in the review modal), so the extraction-time redaction in
     // validateReceiptExtraction doesn't cover them — redact before anything below reads them.
     const merchantRaw = redactText(input.merchantRaw);
-    const originalFilename = redactText(input.originalFilename);
+    const originalFilename = typeof input.originalFilename === 'string' ? redactText(input.originalFilename) : null;
     const errors = [];
     if (typeof fileRef !== 'string' || !FILE_REF_PATTERN.test(fileRef)) {
       errors.push('file_ref is invalid');
