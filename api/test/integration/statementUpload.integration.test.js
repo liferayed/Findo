@@ -1,7 +1,19 @@
+// This suite tests the upload/status HTTP endpoints, not the queue. Mock the enqueue so uploads
+// never put a real job on the shared `findo-statement-extraction` queue: when suites run in
+// parallel, statementExtractionRealQueue's real worker (or the dev findo-api container's) would
+// pick it up and move it past 'pending' mid-test. The real queue -> worker round trip is covered
+// by statementExtractionRealQueue.integration.test.js.
+jest.mock('../../src/documents/statementQueue', () => ({
+  STATEMENT_QUEUE_NAME: 'findo-statement-extraction-test-unused',
+  connection: {},
+  enqueueStatementExtraction: jest.fn(async () => {}),
+}));
+
 const request = require('supertest');
 const { pool } = require('../../src/db');
 const { createApp } = require('../../src/app');
 const { createStatementUploadService } = require('../../src/documents/statementUploadService');
+const { enqueueStatementExtraction } = require('../../src/documents/statementQueue');
 
 async function createTestUser(email) {
   const { rows } = await pool.query(`INSERT INTO users (email, name) VALUES ($1, 'T') RETURNING id`, [email]);
@@ -90,6 +102,13 @@ describe('statement upload + status endpoints (against real Postgres/Redis)', ()
     expect(res.body.shared_item_id).toBeDefined();
   });
 
+  test('POST /documents/statements hands the new shared_item to the extraction queue', async () => {
+    const res = await request(app)
+      .post('/documents/statements')
+      .attach('file', Buffer.from('%PDF-1.4 fake'), { filename: 'statement.pdf', contentType: 'application/pdf' });
+    expect(enqueueStatementExtraction).toHaveBeenCalledWith(res.body.shared_item_id, userId);
+  });
+
   test('POST /documents/statements rejects an unsupported file type', async () => {
     const res = await request(app)
       .post('/documents/statements')
@@ -113,8 +132,7 @@ describe('statement upload + status endpoints (against real Postgres/Redis)', ()
 
   test('GET /documents/:id/status reports confirmed once the statement has been confirmed, not ready_for_review forever', async () => {
     // Seed a shared_items/documents row directly (rather than via POST /documents/statements,
-    // which would enqueue a real extraction job that races with the docker findo-api worker
-    // consuming the same Redis/Postgres) with parse_status 'parsed' and extracted_data.confirmedAt
+    // whose job is mocked out above and so never gets extracted) with parse_status 'parsed' and extracted_data.confirmedAt
     // set — mirroring what statementConfirmService.confirmReview writes on success — then assert
     // the status endpoint reports 'confirmed', not 'ready_for_review'.
     const { rows: [sharedItem] } = await pool.query(
